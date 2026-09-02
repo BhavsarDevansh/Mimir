@@ -23,6 +23,30 @@ mod common;
 use common::*;
 
 // ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn wait_until_some_times_out_while_probe_is_pending() {
+    let result = tokio::time::timeout(
+        Duration::from_millis(200),
+        tokio::spawn(async {
+            wait_until_some(
+                || async { std::future::pending::<Option<()>>().await },
+                Duration::from_millis(50),
+            )
+            .await
+        }),
+    )
+    .await;
+
+    assert!(
+        matches!(result, Ok(Err(join_error)) if join_error.is_panic()),
+        "a pending probe must fail the helper deadline instead of hanging"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
 
@@ -133,18 +157,16 @@ async fn supervisor_round_trips_and_persists_cursor() {
     assert_eq!(supervisor.restore().await.unwrap(), 1);
 
     // The runner's first cycle runs immediately and persists the cursor.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
-    loop {
-        let row = kg.get_connector(row.id).await.unwrap().unwrap();
-        if row.sync_cursor.as_deref() == Some("sup-token-1") {
-            break;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "sync-token cursor never persisted"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    wait_until_some(
+        || async {
+            kg.get_connector(row.id)
+                .await
+                .unwrap()
+                .filter(|row| row.sync_cursor.as_deref() == Some("sup-token-1"))
+        },
+        Duration::from_secs(8),
+    )
+    .await;
 
     supervisor.shutdown().await;
     drop(shutdown_tx);

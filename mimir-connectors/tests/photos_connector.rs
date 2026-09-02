@@ -31,6 +31,9 @@ use mimir_knowledge::normalize::NormalizedFact;
 
 use mimir_core::geocoder::{GeocodeResult, Geocoder, MockGeocoder};
 
+mod common;
+use common::{wait_for_async, wait_until_some};
+
 // ---------------------------------------------------------------------------
 // Harness
 // ---------------------------------------------------------------------------
@@ -324,80 +327,59 @@ async fn supervisor_ingests_photo_into_kb_with_location() {
     // Wait for the owner entity + visited fact + persisted cursor.
     let kg2 = kg.clone();
     let row_id = row.id;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
-    loop {
-        let Some(owner) = mimir_search_entity(&kg2, "Devansh").await else {
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "owner entity never created"
-            );
-            tokio::time::sleep(Duration::from_millis(10)).await;
-            continue;
-        };
-        let facts = kg2.get_facts_by_subject(owner, 100).await.unwrap();
-        if facts
-            .iter()
-            .any(|f| f.object_literal.as_deref() == Some("46.500, 7.500"))
-        {
+    let (owner, fact, after) = wait_until_some(
+        || async {
+            let owner = mimir_search_entity(&kg2, "Devansh").await?;
+            let facts = kg2.get_facts_by_subject(owner, 100).await.unwrap();
+            let fact = facts
+                .iter()
+                .find(|f| f.object_literal.as_deref() == Some("46.500, 7.500"))?;
             // Cursor is persisted by the supervisor in the same cycle, right
             // after the fact insert. Poll for it so a tiny commit-order gap
             // does not flake the test.
-            let after = match kg2.get_connector(row_id).await.unwrap() {
-                Some(c) if c.sync_cursor.is_some() => c,
-                _ => {
-                    assert!(
-                        tokio::time::Instant::now() < deadline,
-                        "cursor never persisted"
-                    );
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                    continue;
-                }
-            };
-            assert_eq!(after.status(), Some(ConnectorStatus::Active));
+            let after = kg2
+                .get_connector(row_id)
+                .await
+                .unwrap()
+                .filter(|connector| connector.sync_cursor.is_some())?;
+            Some((owner, fact.clone(), after))
+        },
+        Duration::from_secs(8),
+    )
+    .await;
+    assert_eq!(after.status(), Some(ConnectorStatus::Active));
 
-            // Flush the async location-overlay worker, then assert the
-            // GPS coordinates landed as an entity_locations row.
-            kg2.flush_location_overlays().await;
-            let locations = kg2.get_locations(owner).await.unwrap();
-            assert!(
-                locations.iter().any(|loc| {
-                    loc.location_type_id == LocationType::Visited as i16
-                        && loc.address.is_none()
-                        && (loc.latitude.unwrap() - 46.5).abs() < 1e-6
-                        && (loc.longitude.unwrap() - 7.5).abs() < 1e-6
-                }),
-                "no Visited GPS location row; got {locations:?}"
-            );
+    // Flush the async location-overlay worker, then assert the GPS
+    // coordinates landed as an entity_locations row.
+    kg2.flush_location_overlays().await;
+    let locations = kg2.get_locations(owner).await.unwrap();
+    assert!(
+        locations.iter().any(|loc| {
+            loc.location_type_id == LocationType::Visited as i16
+                && loc.address.is_none()
+                && (loc.latitude.unwrap() - 46.5).abs() < 1e-6
+                && (loc.longitude.unwrap() - 7.5).abs() < 1e-6
+        }),
+        "no Visited GPS location row; got {locations:?}"
+    );
 
-            // Connector provenance.
-            let fact = facts
-                .iter()
-                .find(|f| f.object_literal.as_deref() == Some("46.500, 7.500"))
-                .unwrap();
-            assert_eq!(
-                kg2.relationship_type_name(fact.relationship_type_id)
-                    .await
-                    .as_deref(),
-                Some("visited"),
-                "coords-only photos author a `visited` fact, not a file-path object"
-            );
-            let sources = kg2.get_sources_for_fact(fact.id).await.unwrap();
-            assert!(sources.iter().any(|s| {
-                s.source_type_id == SourceType::Connector as i16
-                    && s.connector_instance_id == Some(row_id)
-                    && s.connector_type_id == Some(ConnectorType::Photos as i16)
-                    && s.raw_reference.as_deref() == Some("IMG_001.jpg")
-            }));
+    // Connector provenance.
+    assert_eq!(
+        kg2.relationship_type_name(fact.relationship_type_id)
+            .await
+            .as_deref(),
+        Some("visited"),
+        "coords-only photos author a `visited` fact, not a file-path object"
+    );
+    let sources = kg2.get_sources_for_fact(fact.id).await.unwrap();
+    assert!(sources.iter().any(|s| {
+        s.source_type_id == SourceType::Connector as i16
+            && s.connector_instance_id == Some(row_id)
+            && s.connector_type_id == Some(ConnectorType::Photos as i16)
+            && s.raw_reference.as_deref() == Some("IMG_001.jpg")
+    }));
 
-            supervisor.shutdown().await;
-            return;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "visited fact never landed"
-        );
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    supervisor.shutdown().await;
 }
 
 async fn mimir_search_entity(kg: &KnowledgeGraph, name: &str) -> Option<i32> {
@@ -494,47 +476,23 @@ async fn supervisor_ingests_photo_as_took_photo_at_place_fact() {
     let (supervisor, kg, row_id, _shutdown_tx) =
         setup_photos_supervisor(kg, watch.path(), "Devansh", rome_geocoder()).await;
 
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
-    let (owner, place, fact) = loop {
-        // The predicate is created on first ingestion (ensure_relationship_type),
-        // so poll until the supervisor's first cycle registers it.
-        let Some(took_photo_at) = kg.relationship_type_id("took_photo_at").await else {
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "took_photo_at predicate never registered"
-            );
-            tokio::time::sleep(Duration::from_millis(10)).await;
-            continue;
-        };
-        let Some(owner) = mimir_search_entity(&kg, "Devansh").await else {
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "owner entity never created"
-            );
-            tokio::time::sleep(Duration::from_millis(10)).await;
-            continue;
-        };
-        let Some(place) = find_place(&kg, "Rome").await else {
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "Rome place entity never created"
-            );
-            tokio::time::sleep(Duration::from_millis(10)).await;
-            continue;
-        };
-        let facts = kg
-            .get_facts_by_subject_and_predicate(owner, took_photo_at)
-            .await
-            .unwrap();
-        if let Some(fact) = facts.iter().find(|f| f.object_id == Some(place)) {
-            break (owner, place, fact.clone());
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "took_photo_at Rome fact never landed"
-        );
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    };
+    // The predicate is created on first ingestion (ensure_relationship_type),
+    // so poll until the supervisor's first cycle registers it.
+    let (owner, place, fact) = wait_until_some(
+        || async {
+            let took_photo_at = kg.relationship_type_id("took_photo_at").await?;
+            let owner = mimir_search_entity(&kg, "Devansh").await?;
+            let place = find_place(&kg, "Rome").await?;
+            let facts = kg
+                .get_facts_by_subject_and_predicate(owner, took_photo_at)
+                .await
+                .unwrap();
+            let fact = facts.iter().find(|f| f.object_id == Some(place))?;
+            Some((owner, place, fact.clone()))
+        },
+        Duration::from_secs(8),
+    )
+    .await;
 
     // The place is the fact's object entity (no literal object).
     assert_eq!(fact.object_id, Some(place));
@@ -737,14 +695,11 @@ async fn failed_extract_cycle_reprocesses_staged_photos_on_next_cycle() {
 
     // Wait for the injected extract failure to fire, then for the retry
     // cycle to re-scan the failed window and land the photo's fact in the KB.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
-    while !failed_once.load(Ordering::SeqCst) {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "injected extract failure never fired"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    wait_for_async(
+        || async { failed_once.load(Ordering::SeqCst) },
+        Duration::from_secs(8),
+    )
+    .await;
 
     // The retry cycle re-scans from the last confirmed cursor (none) and
     // re-processes the photo: the coords-only `visited` fact lands, and the
@@ -753,42 +708,27 @@ async fn failed_extract_cycle_reprocesses_staged_photos_on_next_cycle() {
     // flake the test.
     let kg2 = kg.clone();
     let row_id = row.id;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
-    loop {
-        let Some(owner) = mimir_search_entity(&kg2, "Devansh").await else {
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "owner entity never created"
-            );
-            tokio::time::sleep(Duration::from_millis(10)).await;
-            continue;
-        };
-        let facts = kg2.get_facts_by_subject(owner, 100).await.unwrap();
-        if facts
-            .iter()
-            .any(|f| f.object_literal.as_deref() == Some("46.500, 7.500"))
-        {
-            let after = match kg2.get_connector(row_id).await.unwrap() {
-                Some(c) if c.sync_cursor.is_some() => c,
-                _ => {
-                    assert!(
-                        tokio::time::Instant::now() < deadline,
-                        "cursor never persisted after the successful retry"
-                    );
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                    continue;
-                }
-            };
-            assert_eq!(after.status(), Some(ConnectorStatus::Active));
-            supervisor.shutdown().await;
-            return;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "visited fact never landed"
-        );
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    let (_, _, after) = wait_until_some(
+        || async {
+            let owner = mimir_search_entity(&kg2, "Devansh").await?;
+            let facts = kg2.get_facts_by_subject(owner, 100).await.unwrap();
+            if !facts
+                .iter()
+                .any(|f| f.object_literal.as_deref() == Some("46.500, 7.500"))
+            {
+                return None;
+            }
+            kg2.get_connector(row_id)
+                .await
+                .unwrap()
+                .filter(|connector| connector.sync_cursor.is_some())
+                .map(|connector| (owner, (), connector))
+        },
+        Duration::from_secs(8),
+    )
+    .await;
+    assert_eq!(after.status(), Some(ConnectorStatus::Active));
+    supervisor.shutdown().await;
 }
 
 /// Issue #332: a cycle that fails *between* `sync` and `extract` leaves the
@@ -850,58 +790,38 @@ async fn failed_before_extract_cycle_does_not_duplicate_staged_photo() {
     // in the buffer), then for the retry cycle to re-scan, dedupe against the
     // still-staged photo, and land exactly one fact with the cursor
     // persisted.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
-    while !failed_once.load(Ordering::SeqCst) {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "injected extract failure never fired"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    wait_for_async(
+        || async { failed_once.load(Ordering::SeqCst) },
+        Duration::from_secs(8),
+    )
+    .await;
 
     let kg2 = kg.clone();
     let row_id = row.id;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
-    loop {
-        let Some(owner) = mimir_search_entity(&kg2, "Devansh").await else {
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "owner entity never created"
-            );
-            tokio::time::sleep(Duration::from_millis(10)).await;
-            continue;
-        };
-        let facts = kg2.get_facts_by_subject(owner, 100).await.unwrap();
-        if facts
-            .iter()
-            .any(|f| f.object_literal.as_deref() == Some("46.500, 7.500"))
-        {
-            assert_eq!(
-                retry_fact_count.load(Ordering::SeqCst),
-                1,
-                "the re-scan must not duplicate the still-staged photo"
-            );
-            let after = match kg2.get_connector(row_id).await.unwrap() {
-                Some(c) if c.sync_cursor.is_some() => c,
-                _ => {
-                    assert!(
-                        tokio::time::Instant::now() < deadline,
-                        "cursor never persisted after the successful retry"
-                    );
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                    continue;
-                }
-            };
-            assert_eq!(after.status(), Some(ConnectorStatus::Active));
-            supervisor.shutdown().await;
-            return;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "visited fact never landed"
-        );
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    let (_, _, after) = wait_until_some(
+        || async {
+            let owner = mimir_search_entity(&kg2, "Devansh").await?;
+            let facts = kg2.get_facts_by_subject(owner, 100).await.unwrap();
+            let _fact = facts
+                .iter()
+                .find(|f| f.object_literal.as_deref() == Some("46.500, 7.500"))?;
+            let after = kg2
+                .get_connector(row_id)
+                .await
+                .unwrap()
+                .filter(|connector| connector.sync_cursor.is_some())?;
+            Some((owner, (), after))
+        },
+        Duration::from_secs(8),
+    )
+    .await;
+    assert_eq!(
+        retry_fact_count.load(Ordering::SeqCst),
+        1,
+        "the re-scan must not duplicate the still-staged photo"
+    );
+    assert_eq!(after.status(), Some(ConnectorStatus::Active));
+    supervisor.shutdown().await;
 }
 
 /// Issue #339: the retry-fact counter must accumulate across overlapping

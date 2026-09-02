@@ -13,7 +13,7 @@ It lives in `mimir-connectors/src/mock/` and is test-only: the module and its re
 - `MockConnector::with_recorder(Arc<MockSyncRecorder>) -> Self` — attach a sync-options observer for F9-style concurrency tests (not part of the config schema or the factory path).
 - `MockConnectorFactory` — `ConnectorFactory` that builds a `MockConnector` from its `config_json`; registered under a `(connector_type, backend)` pair.
 - `MockFactConfig` — the serde DTO for one canned fact.
-- `MockSyncRecorder` — shared observer for `SyncOptions` + in-flight concurrency.
+- `MockSyncRecorder` — shared observer for `SyncOptions` + in-flight concurrency. `wait_for_completed(count)` awaits actual guard drops, so tests can synchronise on completed cycles without wall-clock sleeps.
 - `MockSyncGuard` — RAII guard returned by `MockSyncRecorder::enter`; its `Drop` records the `SyncOptions` and decrements the in-flight counter, so `sync()` tracking stays balanced across returns, panics, and task cancellation.
 
 ## Two-step ingestion

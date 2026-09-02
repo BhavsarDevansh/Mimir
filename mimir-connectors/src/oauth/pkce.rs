@@ -342,6 +342,8 @@ const SUCCESS_HTML: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><
 
 #[cfg(test)]
 mod tests {
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
     use super::*;
     use crate::test_utils::{
         callback_url, mount_token_endpoint, parse_authorize_url, self_callback_opener,
@@ -559,7 +561,9 @@ mod tests {
 
     #[tokio::test]
     async fn read_request_times_out_on_stalled_connection() {
-        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let listener = TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
+            .await
+            .unwrap();
         let addr = listener.local_addr().unwrap();
         // A local process connects and sends nothing — the read must be
         // dropped after the per-connection deadline instead of blocking the
@@ -581,17 +585,21 @@ mod tests {
         // A hostile/stalled local process connects and sends nothing. The
         // connection must be dropped after the per-connection deadline and
         // the flow must still accept the real callback.
-        let _stalled = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        let callback_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
+        let _stalled = TcpStream::connect(callback_addr).await.unwrap();
 
-        let callback = format!("http://127.0.0.1:{port}/callback?code=abc&state=csrf-token");
-        let callback_task = tokio::spawn(async move {
-            let _ = reqwest::get(callback).await;
-        });
+        let mut callback_connection = TcpStream::connect(callback_addr).await.unwrap();
+        callback_connection
+            .write_all(
+                b"GET /callback?code=abc&state=csrf-token HTTP/1.1\r\n\
+Host: 127.0.0.1\r\n\r\n",
+            )
+            .await
+            .unwrap();
+
         let code = wait_for_callback(&listener, &csrf, Duration::from_millis(50))
             .await
             .expect("flow must survive a stalled connection");
-        callback_task.await.unwrap();
         assert_eq!(code, "abc");
     }
 

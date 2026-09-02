@@ -612,7 +612,7 @@ async fn act_reinstantiates_after_runner_exits_naturally() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_start_resume_leaves_single_runner() {
     let (supervisor, _kg, recorder, id, _dir, _tx) = supervisor_with_row_and_recorder(
-        r#"{"sync_delay_ms": 5000, "interval_ms": 100000}"#,
+        r#"{"sync_delay_ms": 100, "interval_ms": 100000}"#,
         Arc::new(MockSyncRecorder::default()),
     )
     .await;
@@ -639,12 +639,11 @@ async fn concurrent_start_resume_leaves_single_runner() {
     // Exactly one live runner survives the burst.
     assert_eq!(supervisor.running_count().await, 1);
     assert!(supervisor.is_running(id).await);
-    // Wait for the surviving runner's sync to be in flight, then give a
-    // hypothetical leaked runner a grace window to start its own sync: a
-    // leaked task would overlap the tracked runner's sync. The sync delay
-    // (5 s) is far longer than the observation window (300 ms), so the
-    // tracked runner is still mid-sync when the window closes even on a
-    // loaded CI runner — a leak cannot hide behind a completed sync.
+    // Wait for the surviving runner's sync to finish. A leaked runner from
+    // the concurrent lifecycle calls would overlap that sync and set
+    // `max_concurrent` to two before completion. The short sync delay lets
+    // the recorder's completion event replace the former fixed observation
+    // window while still proving the same invariant.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     while recorder.max_concurrent() < 1 {
         assert!(
@@ -653,7 +652,9 @@ async fn concurrent_start_resume_leaves_single_runner() {
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    tokio::time::timeout(Duration::from_secs(5), recorder.wait_for_completed(1))
+        .await
+        .expect("surviving runner did not complete its sync");
     assert_eq!(
         recorder.max_concurrent(),
         1,
@@ -840,21 +841,18 @@ struct GatedSyncConnector {
     entered: Arc<tokio::sync::Notify>,
     gate: Arc<tokio::sync::Notify>,
     dropped: Arc<std::sync::atomic::AtomicBool>,
+    dropped_notify: Arc<tokio::sync::Notify>,
 }
 
 /// Sets a shared flag when dropped, proving the cycle future was fully
-/// cancelled (its stack unwound) rather than merely having abort requested.
-///
-/// `Drop` sleeps briefly before setting the flag: task cancellation is
-/// asynchronous, so without the sleep a shutdown that merely *requested*
-/// cancellation (without awaiting the cycle) could race the flag and pass
-/// the regression test for the wrong reason on a fast machine.
-struct SyncDropFlag(Arc<std::sync::atomic::AtomicBool>);
+/// cancelled (its stack unwound) rather than merely having abort requested;
+/// the notify wake-up lets the test await the cancellation event.
+struct SyncDropFlag(Arc<std::sync::atomic::AtomicBool>, Arc<tokio::sync::Notify>);
 
 impl Drop for SyncDropFlag {
     fn drop(&mut self) {
-        std::thread::sleep(Duration::from_millis(200));
         self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.1.notify_waiters();
     }
 }
 
@@ -882,7 +880,7 @@ impl Connector for GatedSyncConnector {
         self.inner.health().await
     }
     async fn sync(&self, options: SyncOptions) -> Result<SyncOutcome, ConnectorError> {
-        let _dropped = SyncDropFlag(Arc::clone(&self.dropped));
+        let _dropped = SyncDropFlag(Arc::clone(&self.dropped), Arc::clone(&self.dropped_notify));
         self.entered.notify_one();
         self.gate.notified().await;
         self.inner.sync(options).await
@@ -918,9 +916,11 @@ async fn shutdown_awaits_an_in_flight_cycle() {
     let entered = Arc::new(tokio::sync::Notify::new());
     let gate = Arc::new(tokio::sync::Notify::new());
     let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let dropped_notify = Arc::new(tokio::sync::Notify::new());
     let entered_for_factory = Arc::clone(&entered);
     let gate_for_factory = Arc::clone(&gate);
     let dropped_for_factory = Arc::clone(&dropped);
+    let dropped_notify_for_factory = Arc::clone(&dropped_notify);
     let registry = ConnectorRegistry::new();
     registry
         .register(
@@ -933,6 +933,7 @@ async fn shutdown_awaits_an_in_flight_cycle() {
                     entered: Arc::clone(&entered_for_factory),
                     gate: Arc::clone(&gate_for_factory),
                     dropped: Arc::clone(&dropped_for_factory),
+                    dropped_notify: Arc::clone(&dropped_notify_for_factory),
                 }) as Arc<dyn Connector>)
             }),
         )
@@ -970,6 +971,17 @@ async fn shutdown_awaits_an_in_flight_cycle() {
 
     // The cycle future must be gone (fully cancelled) by the time `shutdown`
     // returns — a detached cycle would still be blocked on the gate here.
+    let wait_for_drop = async {
+        let dropped_future = dropped_notify.notified();
+        tokio::pin!(dropped_future);
+        while !dropped.load(std::sync::atomic::Ordering::SeqCst) {
+            dropped_future.as_mut().await;
+            dropped_future.set(dropped_notify.notified());
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(5), wait_for_drop)
+        .await
+        .expect("shutdown must drop the in-flight cycle within five seconds");
     assert!(
         dropped.load(std::sync::atomic::Ordering::SeqCst),
         "shutdown must not return while the in-flight cycle task is alive"

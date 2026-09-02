@@ -18,6 +18,12 @@ The `mimir-core` crate contains integration tests that use `wiremock` to verify 
 - SSE stream parsing
 - Connection failure handling
 
+## Connector Tests
+
+Connector tests use deterministic completion signals rather than fixed sleeps. The shared mock recorder can wait for a specific number of completed syncs, and tests that must observe knowledge-graph state use bounded polling with a 10 ms interval; `wait_until_some` returns the first observed value, while `wait_for_async` waits for its predicate to become true.
+
+This makes the connector suite faster and less likely to flake on loaded CI runners while preserving the same assertions.
+
 ## Running the Tests
 
 ```bash

@@ -36,6 +36,7 @@ It is also the vehicle for the end-to-end "sync → extract → insert → query
 
 ## Best practices
 
+- Prefer `MockSyncRecorder::wait_for_completed` or bounded knowledge-graph polling over fixed sleeps so connector tests are faster and deterministic under load.
 - Always set a `cursor` when you want to assert sync progress was persisted.
 - Use `fail_first` / `panic_first` / `always_fail` to exercise failure and recovery paths; keep these at `0` for happy-path tests.
 - Use `health: "auth_expired"` to test the auth-expiry pause path.

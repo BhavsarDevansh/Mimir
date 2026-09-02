@@ -31,7 +31,7 @@
 **Code review is mandatory and non-negotiable.** It must be run after every set of changes, after documentation is updated, and before any commit is made.
 
 **Process:**
-1. Run the code review pass against every file touched in the change set.
+1. Run the code review pass yourself against every file touched in the change set; do not delegate or outsource this review to an external review tool.
 2. Produce findings in a structured table (dimension, finding, severity).
 3. **All findings must be actioned, no matter how trivial.** There are no "optional" or "minor" exceptions. If a finding exists, fix it before proceeding.
 4. Re-run tests, clippy, and fmt after every fix.

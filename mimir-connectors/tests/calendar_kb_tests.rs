@@ -144,10 +144,9 @@ async fn entity_id(kg: &KnowledgeGraph, name: &str) -> Option<i32> {
 /// for the overlay itself (polling `get_event_by_fact`) closes that window:
 /// once it is queryable the fact is committed and the overlay is stable.
 async fn wait_for_has_event_overlay(kg: &KnowledgeGraph) -> (i32, Fact) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
-    loop {
-        let devansh = entity_id(kg, "Devansh").await;
-        if let Some(uid) = devansh {
+    wait_until_some(
+        || async {
+            let uid = entity_id(kg, "Devansh").await?;
             for fact in kg.get_facts_by_subject(uid, 100).await.unwrap() {
                 let is_has_event = kg
                     .relationship_type_name(fact.relationship_type_id)
@@ -155,16 +154,14 @@ async fn wait_for_has_event_overlay(kg: &KnowledgeGraph) -> (i32, Fact) {
                     .as_deref()
                     == Some("has_event");
                 if is_has_event && kg.get_event_by_fact(fact.id).await.unwrap().is_some() {
-                    return (uid, fact);
+                    return Some((uid, fact));
                 }
             }
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "event overlay never landed"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+            None
+        },
+        Duration::from_secs(8),
+    )
+    .await
 }
 
 /// Issue #247: a server-side deletion (CalDAV sync-collection tombstone)
@@ -482,14 +479,11 @@ async fn failed_extract_cycle_reprocesses_staged_events_on_next_cycle() {
     // finishes; the retry trigger below is safe because
     // `trigger_sync_by_slug` queues the request on the runner's channel and
     // the serial runner processes it only after the current cycle returns.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
-    while !failed_once.load(Ordering::SeqCst) {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "injected extract failure never fired"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    wait_for_async(
+        || async { failed_once.load(Ordering::SeqCst) },
+        Duration::from_secs(8),
+    )
+    .await;
 
     // Retry cycle: must re-sync from the last confirmed cursor (none) and
     // re-process event A's window.

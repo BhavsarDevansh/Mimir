@@ -254,22 +254,41 @@ pub fn make_supervisor(
     )
 }
 
+/// Poll a probe until it returns a value or `timeout` elapses, returning the
+/// first observed value. This avoids duplicating deadline/timeout logic in
+/// every test that must wait for asynchronous side effects.
+pub async fn wait_until_some<T, F, Fut>(probe: F, timeout: Duration) -> T
+where
+    F: Fn() -> Fut,
+    Fut: Future<Output = Option<T>>,
+{
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        match tokio::time::timeout_at(deadline, probe()).await {
+            Ok(Some(value)) => return value,
+            Ok(None) => {}
+            Err(_) => panic!("wait_until_some timed out after {timeout:?}"),
+        }
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            panic!("wait_until_some timed out after {timeout:?}");
+        }
+        tokio::time::sleep(
+            deadline
+                .saturating_duration_since(now)
+                .min(Duration::from_millis(10)),
+        )
+        .await;
+    }
+}
+
 /// Poll an async `predicate` until it returns true or `timeout` elapses.
 pub async fn wait_for_async<F, Fut>(predicate: F, timeout: Duration)
 where
     F: Fn() -> Fut,
     Fut: Future<Output = bool>,
 {
-    let deadline = tokio::time::Instant::now() + timeout;
-    loop {
-        if predicate().await {
-            return;
-        }
-        if tokio::time::Instant::now() >= deadline {
-            panic!("wait_for_async timed out after {timeout:?}");
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
+    wait_until_some(|| async { predicate().await.then_some(()) }, timeout).await;
 }
 
 pub fn with_slug(slug: &str, extra: serde_json::Value) -> String {
@@ -310,10 +329,11 @@ pub fn test_registry() -> Arc<ConnectorRegistry> {
 #[cfg(feature = "test-mock-connector")]
 pub fn recording_registry(recorder: Arc<MockSyncRecorder>) -> Arc<ConnectorRegistry> {
     let registry = ConnectorRegistry::new();
-    for ctype in [
-        ConnectorType::Email,
-        ConnectorType::Calendar,
-        ConnectorType::Photos,
+    for (ctype, backend) in [
+        (ConnectorType::Email, "mock"),
+        (ConnectorType::Email, "test"),
+        (ConnectorType::Calendar, "test"),
+        (ConnectorType::Photos, "local"),
     ] {
         let rec = recorder.clone();
         let factory = FnConnectorFactory::new(
@@ -325,7 +345,7 @@ pub fn recording_registry(recorder: Arc<MockSyncRecorder>) -> Arc<ConnectorRegis
             },
         );
         registry
-            .register(ctype, "test".to_string(), factory)
+            .register(ctype, backend.to_string(), factory)
             .unwrap();
     }
     Arc::new(registry)

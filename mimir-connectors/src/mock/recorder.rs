@@ -9,6 +9,7 @@ pub struct MockSyncRecorder {
     recorded: std::sync::Mutex<Vec<SyncOptions>>,
     in_flight: AtomicU32,
     max_concurrent: AtomicU32,
+    completion: tokio::sync::Notify,
 }
 
 impl MockSyncRecorder {
@@ -34,6 +35,16 @@ impl MockSyncRecorder {
     /// Peak number of concurrently in-flight `sync()` calls observed.
     pub fn max_concurrent(&self) -> u32 {
         self.max_concurrent.load(Ordering::SeqCst)
+    }
+
+    /// Wait until `completed_calls` `sync()` calls have returned.
+    pub async fn wait_for_completed(&self, completed_calls: usize) {
+        let notified = self.completion.notified();
+        tokio::pin!(notified);
+        while self.len() < completed_calls {
+            notified.as_mut().await;
+            notified.set(self.completion.notified());
+        }
     }
 
     /// Enter a `sync()` call, returning an RAII guard that records the
@@ -72,6 +83,26 @@ impl Drop for MockSyncGuard<'_> {
             .lock()
             .expect("recorder lock poisoned")
             .push(self.options);
+        self.recorder.completion.notify_waiters();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn completion_wait_observes_guard_drop() {
+        let recorder = MockSyncRecorder::default();
+        let wait = recorder.wait_for_completed(1);
+        tokio::pin!(wait);
+
+        let guard = recorder.enter(SyncOptions::default());
+        drop(guard);
+
+        wait.await;
+        assert_eq!(recorder.len(), 1);
+        assert_eq!(recorder.max_concurrent(), 1);
     }
 }
 

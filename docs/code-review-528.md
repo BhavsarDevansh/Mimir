@@ -35,6 +35,7 @@
 | Code quality | The candidate rows were represented by an opaque four-field tuple. | Low | Replaced the tuple with a local `MergeCandidate` struct. |
 | DRY compliance | Tests repeated direct fact-and-source seeding SQL. | Low | Extracted an `insert_unmanaged_fact` test helper. |
 | Correctness | The review documentation claimed pass-level rollback coverage, but no test exercised a failure after the first merge. | Low | Added a fault-injection regression test that verifies the first merge, confidence boost, provenance transfer, and dependency writes roll back together. |
+| Guideline compliance | The workspace version was `0.153.10`, while the release target and version-linked documentation used `0.153.9`. | Low | Aligned the workspace version to `0.153.9`. |
 
 ## Actions Taken During Review
 
@@ -44,5 +45,6 @@
 - Documented the v0.153.9 benchmark delta and updated technical and user-facing optimization documentation.
 - Filed #548 for the pre-existing semantic-dedup object comparison issue outside this change set.
 - Re-ran formatting, the targeted optimization suite, the workspace test suite, the full workspace Clippy check with warnings denied, and the targeted dedup benchmark.
+- Re-reviewed the release-version alignment and re-ran formatting, the workspace test suite, and the full workspace Clippy check with warnings denied.
 
 The final review returned zero open findings.

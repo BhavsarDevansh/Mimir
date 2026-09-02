@@ -35,8 +35,8 @@ async fn test_chat_extracts_facts_after_response() {
 
     assert_eq!(response.status(), StatusCode::OK);
     assert!(
-        wait_for_favourite_colour(&state).await,
-        "expected favourite_colour=blue fact to be extracted within 5s"
+        wait_for_prefers_blue(&state).await,
+        "expected prefers=blue fact to be extracted within 5s"
     );
 }
 
@@ -104,7 +104,7 @@ async fn test_incognito_turn_enqueues_no_hook_and_writes_no_facts() {
     // persisted the `Devansh` fact by the time the queue drains.
     wait_for_chat_hook_idle(&state).await;
     assert!(
-        !has_favourite_colour(&state).await,
+        !has_prefers_blue(&state).await,
         "incognito turn must not persist facts (the user entity itself is created at daemon start)"
     );
     let sessions = state.context_manager.list_sessions().await.unwrap();
@@ -146,7 +146,7 @@ async fn test_non_incognito_turn_enqueues_hook_and_persists_fact() {
     assert_eq!(response.status(), StatusCode::OK);
 
     assert!(
-        wait_for_favourite_colour(&state).await,
+        wait_for_prefers_blue(&state).await,
         "non-incognito turn should persist the entity/fact via the hook"
     );
 }
@@ -197,7 +197,7 @@ async fn test_incognito_stream_enqueues_no_hook_and_writes_no_facts() {
     );
     wait_for_chat_hook_idle(&state).await;
     assert!(
-        !has_favourite_colour(&state).await,
+        !has_prefers_blue(&state).await,
         "incognito turn must not persist facts (the user entity itself is created at daemon start)"
     );
 }
@@ -242,7 +242,7 @@ async fn test_non_incognito_stream_enqueues_hook_and_persists_fact() {
         .unwrap();
 
     assert!(
-        wait_for_favourite_colour(&state).await,
+        wait_for_prefers_blue(&state).await,
         "non-incognito stream turn should persist the entity/fact via the hook"
     );
 }

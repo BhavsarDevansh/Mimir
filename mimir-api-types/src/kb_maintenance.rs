@@ -114,6 +114,58 @@ pub struct RejectFactRequest {
     pub reason: Option<String>,
 }
 
+// ---------------------------------------------------------------------------
+// Knowledge Graph — unrecognized predicate staging (issue #468)
+// ---------------------------------------------------------------------------
+
+/// A staged LLM fact whose predicate did not resolve to a controlled leaf.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UnrecognizedFactRow {
+    pub id: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connector_instance_id: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_reference: Option<String>,
+    pub relationship_type_raw: String,
+    pub payload_json: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proposed_relationship_type_id: Option<i16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolution_note: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// Response body for `GET /kb/staged`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UnrecognizedFactListResponse {
+    pub total: usize,
+    pub items: Vec<UnrecognizedFactRow>,
+}
+
+/// Request body for `POST /kb/staged/{id}/map`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MapUnrecognizedFactRequest {
+    pub relationship_type_id: i16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// Response body for `POST /kb/staged/{id}/map`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MapUnrecognizedFactResponse {
+    pub id: i64,
+    pub relationship_type_id: i16,
+}
+
+/// Request body for `POST /kb/staged/{id}/reject`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct RejectUnrecognizedFactRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

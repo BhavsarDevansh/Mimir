@@ -636,24 +636,31 @@ async fn record_fact_counts_increments_cumulative_counters() {
     let c = kg.upsert_connector(gmail_input("personal")).await.unwrap();
     assert_eq!(c.facts_accepted, 0);
     assert_eq!(c.facts_dropped, 0);
+    assert_eq!(c.facts_staged, 0);
 
-    kg.record_connector_fact_counts(c.id, 2, 1).await.unwrap();
+    kg.record_connector_fact_counts(c.id, 2, 1, 3)
+        .await
+        .unwrap();
     let after_first = kg.get_connector(c.id).await.unwrap().unwrap();
     assert_eq!(after_first.facts_accepted, 2);
     assert_eq!(after_first.facts_dropped, 1);
+    assert_eq!(after_first.facts_staged, 3);
 
     // Counters accumulate across extraction runs (backfill + incremental).
-    kg.record_connector_fact_counts(c.id, 1, 0).await.unwrap();
+    kg.record_connector_fact_counts(c.id, 1, 0, 1)
+        .await
+        .unwrap();
     let after_second = kg.get_connector(c.id).await.unwrap().unwrap();
     assert_eq!(after_second.facts_accepted, 3);
     assert_eq!(after_second.facts_dropped, 1);
+    assert_eq!(after_second.facts_staged, 4);
 }
 
 #[tokio::test]
 async fn record_fact_counts_unknown_connector_errors() {
     let (kg, _dir) = init_kg().await;
     let err = kg
-        .record_connector_fact_counts(i32::MAX, 1, 0)
+        .record_connector_fact_counts(i32::MAX, 1, 0, 0)
         .await
         .unwrap_err();
     assert!(matches!(
@@ -668,7 +675,7 @@ async fn record_fact_counts_rejects_negative_deltas() {
     let c = kg.upsert_connector(gmail_input("personal")).await.unwrap();
 
     let err = kg
-        .record_connector_fact_counts(c.id, -1, 0)
+        .record_connector_fact_counts(c.id, -1, 0, 0)
         .await
         .unwrap_err();
     assert!(matches!(
@@ -677,7 +684,7 @@ async fn record_fact_counts_rejects_negative_deltas() {
     ));
 
     let err = kg
-        .record_connector_fact_counts(c.id, 0, -1)
+        .record_connector_fact_counts(c.id, 0, -1, 0)
         .await
         .unwrap_err();
     assert!(matches!(

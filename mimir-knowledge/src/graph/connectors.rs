@@ -186,12 +186,14 @@ impl KnowledgeGraph {
         id: i32,
         accepted: i64,
         dropped: i64,
+        staged: i64,
     ) -> Result<(), KnowledgeError> {
         queries::connector::record_connector_fact_counts(
             &self.pool,
             id,
             accepted,
             dropped,
+            staged,
             self.now(),
         )
         .await

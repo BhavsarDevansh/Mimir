@@ -34,7 +34,7 @@ impl KnowledgeGraph {
     /// Skips rule-engine passes; callers should trigger them separately if needed.
     pub async fn insert_facts_batch(
         &self,
-        facts: Vec<models::fact::NewFact>,
+        mut facts: Vec<models::fact::NewFact>,
     ) -> Result<Vec<models::fact::Fact>, KnowledgeError> {
         if facts.is_empty() {
             return Ok(Vec::new());
@@ -42,6 +42,30 @@ impl KnowledgeGraph {
 
         let mut tx = self.pool.begin().await?;
         let now = self.now();
+
+        let mut relationship_type_ids = Vec::with_capacity(facts.len());
+        for fact in &mut facts {
+            let relationship_type_id = self
+                .resolve_emit_eligible_relationship_type(&fact.relationship_type)
+                .await?
+                .ok_or_else(|| {
+                    KnowledgeError::Validation(format!(
+                        "predicate '{}' is not an emit-eligible taxonomy leaf",
+                        fact.relationship_type
+                    ))
+                })?;
+            if let Some(name) = self.relationship_type_name(relationship_type_id).await {
+                fact.relationship_type = name;
+            }
+            if fact.category_ids.is_empty()
+                && let Some(category_id) = self
+                    .default_category_id_for_relationship_type(relationship_type_id)
+                    .await?
+            {
+                fact.category_ids.push(category_id);
+            }
+            relationship_type_ids.push(relationship_type_id);
+        }
 
         let referenced_ids: HashSet<i32> = facts
             .iter()
@@ -115,11 +139,7 @@ impl KnowledgeGraph {
             }
         }
 
-        for new_fact in &facts {
-            let relationship_type_id = self
-                .ensure_relationship_type_in_tx(&mut tx, &new_fact.relationship_type)
-                .await?;
-
+        for (new_fact, relationship_type_id) in facts.iter().zip(relationship_type_ids) {
             let connector_score = new_fact
                 .connector_instance_id
                 .and_then(|instance_id| instance_types.get(&instance_id).copied())
@@ -179,8 +199,18 @@ impl KnowledgeGraph {
         Box::pin(async move {
             // Resolve predicate name to id.
             let relationship_type_id = self
-                .ensure_relationship_type(&new_fact.relationship_type)
-                .await?;
+                .resolve_emit_eligible_relationship_type(&new_fact.relationship_type)
+                .await?
+                .ok_or_else(|| {
+                    KnowledgeError::Validation(format!(
+                        "predicate '{}' is not an emit-eligible taxonomy leaf",
+                        new_fact.relationship_type
+                    ))
+                })?;
+
+            if let Some(name) = self.relationship_type_name(relationship_type_id).await {
+                new_fact.relationship_type = name;
+            }
 
             // Cycle detection: skip duplicate triples in the same cascade.
             if ctx.contains(
@@ -244,6 +274,14 @@ impl KnowledgeGraph {
             if new_fact.inferred {
                 new_fact.source_type = SourceType::Inference;
                 new_fact.extraction_method = Some(ExtractionMethod::InferenceRule);
+            }
+
+            if new_fact.category_ids.is_empty()
+                && let Some(category_id) = self
+                    .default_category_id_for_relationship_type(relationship_type_id)
+                    .await?
+            {
+                new_fact.category_ids.push(category_id);
             }
 
             let mut tx = self.pool.begin().await?;

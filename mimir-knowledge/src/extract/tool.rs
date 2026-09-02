@@ -7,7 +7,7 @@ use std::sync::LazyLock;
 /// The `remember` tool JSON Schema, built once and shared by every extraction
 /// call (issue #259). The schema is static — there is no per-call input — so
 /// rebuilding it per extraction was a steady stream of identical allocations.
-static REMEMBER_TOOL_SCHEMA: LazyLock<serde_json::Value> = LazyLock::new(|| {
+static REMEMBER_TOOL_SCHEMA_TEMPLATE: LazyLock<serde_json::Value> = LazyLock::new(|| {
     serde_json::json!({
         "type": "function",
         "function": {
@@ -37,7 +37,7 @@ static REMEMBER_TOOL_SCHEMA: LazyLock<serde_json::Value> = LazyLock::new(|| {
                                 },
                                 "relationship_type": {
                                     "type": "string",
-                                    "description": "The relationship or property being asserted."
+                                    "description": "The controlled relationship leaf being asserted. Unknown predicates are staged for governance review; they are never inserted."
                                 },
                                 "object": {
                                     "type": "string",
@@ -126,7 +126,16 @@ static REMEMBER_TOOL_SCHEMA: LazyLock<serde_json::Value> = LazyLock::new(|| {
     })
 });
 
-/// The `remember` tool JSON Schema, built once and shared.
-pub fn remember_tool_schema() -> &'static serde_json::Value {
-    &REMEMBER_TOOL_SCHEMA
+/// Build the `remember` tool JSON Schema with the DB taxonomy's emit-eligible
+/// leaves as a closed enum.
+pub fn remember_tool_schema(predicate_names: &[String]) -> serde_json::Value {
+    let mut schema = REMEMBER_TOOL_SCHEMA_TEMPLATE.clone();
+    schema["function"]["parameters"]["properties"]["facts"]["items"]["properties"]["relationship_type"]
+        ["enum"] = serde_json::Value::Array(
+        predicate_names
+            .iter()
+            .map(|name| serde_json::Value::String(name.clone()))
+            .collect(),
+    );
+    schema
 }

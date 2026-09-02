@@ -89,6 +89,7 @@ fn connector_fixture(id: i32, slug: &str) -> ConnectorResponse {
         item_count: 0,
         facts_accepted: 0,
         facts_dropped: 0,
+        facts_staged: 0,
         auth: None,
     }
 }

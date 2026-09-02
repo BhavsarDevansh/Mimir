@@ -94,7 +94,7 @@ async fn test_kg_query_predicate_filter() {
     };
     let f2 = NewFact {
         subject_id: alice,
-        relationship_type: "enjoys".to_string(),
+        relationship_type: "prefers".to_string(),
         object_id: Some(book),
         object_literal: None,
         valid_from: None,
@@ -193,14 +193,13 @@ async fn test_kg_query_confidence_filter() {
 async fn test_kg_query_pagination() {
     let tg = common::TestGraph::new().await;
     let alice = tg.create_person("Alice").await;
-    let london = tg.create_place("London").await;
 
     for i in 0..60 {
         let f = NewFact {
             subject_id: alice,
-            relationship_type: format!("predicate_{}", i),
-            object_id: Some(london),
-            object_literal: None,
+            relationship_type: "prefers".to_string(),
+            object_id: None,
+            object_literal: Some(format!("topic_{}", i)),
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,

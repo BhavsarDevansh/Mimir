@@ -60,6 +60,7 @@ Facts connect entities with a **relationship type** (sometimes called a predicat
 
 - Relationship types also form a **hierarchy** (a directed acyclic graph). A type can sit under parent types — for example `studied_at` and `graduated_from` can be children of an `education` type. When the agent queries a type it can expand to the whole **subtree**, so asking about "education" finds `studied_at`, `graduated_from`, and any other descendants without the agent needing to know every type name (see `kg_query` with `include_subtree`).
 - Redundant verbs are consolidated: `based_in` and `lived_in` are aliases of `resides_in` (current and previous residence are one relation with different time bounds), and `is_in` is an alias of `located_in`. The abstract parents `employment`, `education`, `residence`, and `containment` are query-only subtree roots — they are never stored on facts.
+- Migration 060 extends this hierarchy with explicit root/leaf metadata, deterministic category rules, and a durable staging queue for unrecognized extraction output (#468). Domain-specific richness should prefer typed entity frames and attributes over another one-off predicate.
 
 ### Deduplication
 

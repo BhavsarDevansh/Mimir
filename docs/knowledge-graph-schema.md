@@ -60,13 +60,15 @@ Lookup tables are seeded across migrations `001`, `012`, `013`, `020`, `022`, `0
 | `preference_contexts` | Normalized context conditions for preferences (no JSON) |
 | `preference_sources` | Provenance for preference values |
 | `preference_audit_log` | Immutable history of preference changes |
-| `relationship_types` | Canonical relationship predicates (thin verbs); see Relationship Type DAG |
+| `relationship_types` | Closed relationship predicate tree with parentage, query-only roots, emit-eligible leaves, definitions, and policy metadata |
 | `relationship_type_aliases` | Globally-unique English synonyms → canonical relationship type id |
 | `relationship_type_hierarchy` | Parent/child edges between relationship types (seeded abstract parents for subtree queries; grouping still lives in `categories`) |
 | `relationship_constraints` | Valid subject/object entity-type combinations per relationship type (renamed from `predicate_constraints` by migration `031`) |
 | `categories` | Dewey-Decimal-style fact taxonomy with `memory_weight` and `memory_bucket_id` (memory classification; see `docs/memory-system.md`) |
 | `fact_categories` | Many-to-many junction: facts ↔ categories (multi-tag precision + ranking) |
 | `category_aliases` | Natural-language domain words → category id (see Category Aliases) |
+| `relationship_type_category_rules` | Deterministic default catalogue-category rules for relationship leaves (#468) |
+| `unrecognized_facts` | Durable staging queue for LLM predicates outside the closed taxonomy (#468) |
 
 ### System Tables
 
@@ -190,6 +192,7 @@ Migrations are strictly ordered by foreign-key dependencies:
 50. `057` — Connector fact-acceptance counters for LLM-prose extraction outcomes (#508)
 51. `058` — Recurrence interval and series bounds on event and pending-event overlays (PR #513 review)
 52. `059` — `facts(subject_id, relationship_type_id)` composite index for overlap, triple-existence, and traversal scans (#527)
+53. `060` — Closed taxonomy metadata and rules, `prefers` consolidation, and unrecognized-fact staging (#468)
 
 ---
 

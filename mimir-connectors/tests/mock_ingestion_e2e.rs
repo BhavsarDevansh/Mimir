@@ -325,7 +325,7 @@ async fn push_mock_syncs_canned_facts_into_kb() {
         "mode": "push",
         "interval_ms": 40,
         "cursor": "pc",
-        "facts": [literal_fact("Cara Push", "knows", "Dan", "p-1")],
+        "facts": [literal_fact("Cara Push", "has_partner", "Dan", "p-1")],
     });
     let row = kg
         .upsert_connector(upsert_mock("push", config))
@@ -351,11 +351,11 @@ async fn push_mock_syncs_canned_facts_into_kb() {
 
     let cara = entity_id(&kg, "Cara Push").await.expect("Cara Push entity");
     let facts = kg.get_facts_by_subject(cara, 100).await.unwrap();
-    let knows = facts
+    let partner = facts
         .iter()
         .find(|f| f.object_literal.as_deref() == Some("Dan"))
-        .expect("knows Dan fact not found");
-    assert_connector_source(&kg, knows.id, row.id, "p-1").await;
+        .expect("has_partner Dan fact not found");
+    assert_connector_source(&kg, partner.id, row.id, "p-1").await;
 
     // Manual triggers are unsupported for push connectors (F9 contract).
     let err = supervisor

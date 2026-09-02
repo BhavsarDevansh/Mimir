@@ -195,6 +195,10 @@ async fn main() {
                 ensure_daemon(&transport, &mut daemon_started).await;
                 kb::handle_kb_pending(json, &transport).await;
             }
+            cli::KbCommands::Staged { command } => {
+                ensure_daemon(&transport, &mut daemon_started).await;
+                kb::handle_kb_staged(command, &transport).await;
+            }
             cli::KbCommands::Confirm { fact_id, json } => {
                 ensure_daemon(&transport, &mut daemon_started).await;
                 kb::handle_kb_confirm(fact_id, json, &transport).await;

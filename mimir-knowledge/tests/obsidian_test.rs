@@ -79,7 +79,7 @@ async fn export_renders_frontmatter_sections_wiki_links_and_attributes() {
     let facts = vec![
         seed_fact(
             "Devansh",
-            "married_to",
+            "has_partner",
             "Alice",
             true,
             EntityType::Person,
@@ -101,7 +101,7 @@ async fn export_renders_frontmatter_sections_wiki_links_and_attributes() {
         ),
         seed_fact(
             "Devansh",
-            "allergic_to",
+            "allergy",
             "peanuts",
             false,
             EntityType::Concept,
@@ -112,7 +112,7 @@ async fn export_renders_frontmatter_sections_wiki_links_and_attributes() {
         ),
         seed_fact(
             "Devansh",
-            "birthday",
+            "born_on",
             "1995-08-20",
             false,
             EntityType::Concept,
@@ -161,23 +161,23 @@ async fn export_renders_frontmatter_sections_wiki_links_and_attributes() {
     // Dates: event overlay facts carry event type + recurrence.
     let dates_line = content
         .lines()
-        .find(|l| l.contains("birthday") && l.contains("1995-08-20"))
-        .expect("birthday date line");
+        .find(|l| l.contains("born_on") && l.contains("1995-08-20"))
+        .expect("born_on date line");
     assert!(dates_line.contains("Birthday"), "event type: {dates_line}");
     assert!(dates_line.contains("yearly"), "recurrence: {dates_line}");
 
     // Relationships: entity objects render as wiki-links with bounds.
     let rel_line = content
         .lines()
-        .find(|l| l.contains("married") && l.contains("[[Alice]]"))
-        .expect("married wiki-link line");
+        .find(|l| l.contains("has_partner") && l.contains("[[Alice]]"))
+        .expect("has_partner wiki-link line");
     assert!(rel_line.contains("since 2022-01-01"), "bounds: {rel_line}");
 
     // Facts: literal objects stay plain, confidence rendered.
     let fact_line = content
         .lines()
-        .find(|l| l.contains("allergic_to") && l.contains("peanuts"))
-        .expect("allergic_to line");
+        .find(|l| l.contains("allergy") && l.contains("peanuts"))
+        .expect("allergy line");
     assert!(fact_line.contains("confidence:"), "confidence: {fact_line}");
 
     assert_eq!(export.entity_count, 3, "Devansh, Alice, Rome");
@@ -253,7 +253,7 @@ aliases: ["Dev"]
 - birthday → 1995-08-20 (1995-08-20, Birthday, yearly)
 
 ## Relationships
-- married_to → Alice (since 2022-01-01)
+- has_partner → Alice (since 2022-01-01)
 
 ## Preferences
 - FoodPreference: favourite = Italian
@@ -359,7 +359,7 @@ async fn import_round_trips_an_export() {
     let facts = vec![
         seed_fact(
             "Devansh",
-            "married_to",
+            "has_partner",
             "Alice",
             true,
             EntityType::Person,
@@ -546,7 +546,7 @@ type: Person
 # Devansh
 
 ## Relationships
-- [[Alice]] — married_to (since 2022-01-01)
+- [[Alice]] — has_partner (since 2022-01-01)
 "#
         .to_string(),
     };
@@ -585,7 +585,7 @@ type: Person
 # Devansh
 
 ## Relationships
-- married_to → [[Alice]] (since 2022-01-01)
+- has_partner → [[Alice]] (since 2022-01-01)
 "#
         .to_string(),
     };
@@ -632,7 +632,7 @@ type: Person
 # Devansh
 
 ## Relationships
-- married_to → [[Alice]] (since 2022-01-01)
+- has_partner → [[Alice]] (since 2022-01-01)
 - knows → [[Alice]]
 "#
         .to_string(),

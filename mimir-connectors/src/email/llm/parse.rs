@@ -30,16 +30,15 @@ pub(super) fn build_fact(
     fact: EmailFact,
     user_identity: Option<&str>,
     raw_ref: &str,
+    predicate_names: &[String],
 ) -> Result<NormalizedFact, ConnectorError> {
     let subject_type = parse_entity_type(&fact.subject_type).map_err(|e| {
         ConnectorError::Parse(format!("invalid subject_type {:?}: {e}", fact.subject_type))
     })?;
 
-    // The LLM schema leaves relationship_type open, so Rust validates it
-    // against the canonical vocabulary (issue #412): a non-canonical
-    // predicate is dropped (the caller warns) instead of auto-creating a
-    // `relationship_types` row on first sync.
-    if !mimir_knowledge::is_canonical_predicate_name(&fact.relationship_type) {
+    // The schema enum is generated from the DB taxonomy; Rust validates the
+    // same list again so malformed model output cannot bypass the tool schema.
+    if !predicate_names.contains(&fact.relationship_type) {
         return Err(ConnectorError::Parse(format!(
             "non-canonical relationship_type {:?}",
             fact.relationship_type
@@ -105,7 +104,7 @@ pub(super) fn build_fact(
         is_sensitive: fact.is_sensitive,
         is_correction: false,
         correction_scope: None,
-        category_ids: Vec::new(),
+        category_ids: fact.category_ids,
         recurrence,
         recurrence_rule: None,
         recurrence_interval: 1,

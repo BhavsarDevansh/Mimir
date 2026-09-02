@@ -21,6 +21,7 @@ pub use kb::{
     kb_merge_apply_handler, kb_merge_keep_handler, kb_merges_handler,
     kb_optimization_run_now_handler, kb_optimization_status_handler, kb_pending_handler,
     kb_profile_handler, kb_query_handler, kb_reject_fact_handler, kb_show_handler,
+    kb_staged_list_handler, kb_staged_map_handler, kb_staged_reject_handler,
     kb_trash_empty_handler, kb_trash_list_handler, kb_trash_restore_handler,
 };
 pub use kb_categories::{create_category, delete_category, list_categories, show_category};

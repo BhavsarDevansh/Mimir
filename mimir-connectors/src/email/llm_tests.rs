@@ -42,6 +42,13 @@ fn llm_tool_response(json: &str) -> Arc<MockLlmClient> {
     )
 }
 
+fn taxonomy_names() -> Vec<String> {
+    mimir_knowledge::CANONICAL_PREDICATES
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect()
+}
+
 async fn stage(connector: &EmailConnector, raw: Vec<u8>) {
     connector.buffer.lock().await.push(imap::RawEmail {
         uid: 42,
@@ -254,6 +261,7 @@ async fn prose_prompt_carries_the_full_envelope() {
         "17:42",
         Some(internal),
         Some("devansh@example.com"),
+        &taxonomy_names(),
     )
     .await
     .expect("extract");
@@ -310,6 +318,7 @@ async fn old_actionable_email_binds_past_valid_until() {
         "17:42",
         None,
         Some("devansh@example.com"),
+        &taxonomy_names(),
     )
     .await
     .expect("extract")
@@ -365,6 +374,7 @@ async fn forwarded_email_facts_are_not_actionable() {
         "17:42",
         None,
         Some("devansh@example.com"),
+        &taxonomy_names(),
     )
     .await
     .expect("extract")
@@ -414,6 +424,7 @@ async fn wrong_recipient_email_facts_are_not_actionable() {
         "17:42",
         None,
         Some("devansh@example.com"),
+        &taxonomy_names(),
     )
     .await
     .expect("extract")
@@ -588,8 +599,8 @@ async fn llm_layer_drops_facts_with_non_canonical_predicates() {
         !has_fact(&env.kg, "owes", "the bank").await,
         "non-canonical predicate must be dropped"
     );
-    // The drop must be visible, not silent: the connector row records the
-    // cumulative dropped-fact counter (issue #508).
+    // The unknown predicate must be visible, not silent: it is durably staged
+    // and the connector row records the cumulative staged counter (#468/#508).
     let row = env
         .kg
         .get_connector_by_slug("gmail-test")
@@ -598,6 +609,7 @@ async fn llm_layer_drops_facts_with_non_canonical_predicates() {
         .unwrap();
     assert_eq!(row.facts_accepted, 0);
     assert_eq!(row.facts_dropped, 1);
+    assert_eq!(row.facts_staged, 1);
 }
 
 #[tokio::test]
@@ -936,10 +948,11 @@ fn llm_tool_message(json: &str) -> mimir_core::llm::Message {
 }
 
 #[tokio::test]
-async fn llm_layer_records_accepted_and_dropped_fact_counters() {
-    // The hook must persist cumulative accepted/dropped fact counters on the
-    // connector row (issue #508) so `mimir connector list` / `status` shows
-    // the acceptance rate instead of hiding dropped facts behind `items`.
+async fn llm_layer_records_accepted_dropped_and_staged_fact_counters() {
+    // The hook must persist cumulative accepted/dropped/staged fact counters
+    // on the connector row (issues #468 and #508) so `mimir connector list` /
+    // `status` shows the full extraction outcome instead of hiding data loss
+    // behind `items`.
     let mock = llm_tool_response(
         r#"{"facts": [
                 {"subject": "the user", "subject_type": "Person", "relationship_type": "has_appointment", "object": "Dentist check-up", "object_is_entity": true, "object_type": "Event"},
@@ -968,4 +981,5 @@ async fn llm_layer_records_accepted_and_dropped_fact_counters() {
         .unwrap();
     assert_eq!(row.facts_accepted, 1);
     assert_eq!(row.facts_dropped, 1);
+    assert_eq!(row.facts_staged, 1);
 }

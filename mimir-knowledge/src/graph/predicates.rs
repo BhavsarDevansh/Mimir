@@ -1,11 +1,9 @@
 use crate::graph::KnowledgeGraph;
 use crate::*;
 
-/// Canonical relationship-type names the conversational extraction path
-/// accepts (issue #401). Seeded by migrations 013/023/025/031/036/037, 050,
-/// 051 and 053; the prompt-instructed `favourite_<thing>` family is an open
-/// set handled separately by
-/// [`KnowledgeGraph::resolve_canonical_relationship_type`].
+/// Canonical leaf names the extraction schemas expose. The database remains
+/// the resolver's source of truth; this const pins the current seed and is
+/// used only by tests and deterministic connector registration checks.
 ///
 /// Kept in sync with the seed by
 /// `canonical_const_matches_seeded_relationship_types` in
@@ -29,7 +27,7 @@ pub const CANONICAL_PREDICATES: &[&str] = &[
     "died_on",
     "located_in",
     "created_on",
-    "has_preference",
+    "prefers",
     "rejected_action",
     // Migrations 036/037 (ids 13-31).
     "studied_at",
@@ -40,15 +38,12 @@ pub const CANONICAL_PREDICATES: &[&str] = &[
     "has_sibling",
     "has_child",
     "preferred_name",
-    "favourite_food",
-    "favourite_colour",
     "health_condition",
     "has_name",
     "studied",
     "completed_degree",
     "educational_status",
     "job_title",
-    "likes",
     "dislikes",
     // Migration 050.
     "skill",
@@ -97,10 +92,8 @@ pub const CANONICAL_PREDICATES: &[&str] = &[
 /// migrations 013/050 and deliberately not listed here. A new connector
 /// predicate must therefore be seeded canonical before the connector tests
 /// pass; adding it here additionally pins the seed/const pair and documents
-/// the emit surface. The email LLM layer validates its emitted predicates
-/// against [`is_canonical_predicate_name`], so even the open LLM surface
-/// cannot auto-create rows outside the prompt-instructed
-/// `favourite_<thing>` family, which is canonical by design.
+/// the emit surface. The email LLM layer now validates against the DB-backed
+/// extraction schema and re-checks that same list in Rust.
 pub const CONNECTOR_EMITTED_PREDICATES: &[&str] = &[
     // Calendar / Email iMIP (mimir-connectors/src/ical/facts.rs) and JSON-LD
     // EventReservation (mimir-connectors/src/email/jsonld/reservations.rs).
@@ -137,15 +130,13 @@ pub const CONNECTOR_EMITTED_PREDICATES: &[&str] = &[
 /// (`split_list_objects` in `extract/parse.rs`) and the insert overlap logic
 /// (`insert_fact_in_tx` in `queries/fact/insert.rs`), so the two can never
 /// drift apart. The open `favourite_<thing>` family is multi-valued through
-/// the same shared `is_favourite_family_predicate` helper. Every entry is a
+/// Every entry is a
 /// canonical predicate (pinned by `multi_valued_predicates_are_canonical` in
 /// `mimir-knowledge/tests/predicate_allowlist_test.rs`).
 pub const MULTI_VALUED_PREDICATES: &[&str] = &[
+    "prefers",
     "hobby",
-    "likes",
     "dislikes",
-    "favourite_colour",
-    "favourite_food",
     "skill",
     "has_pets",
     "has_child",
@@ -154,32 +145,19 @@ pub const MULTI_VALUED_PREDICATES: &[&str] = &[
     "has_partner",
 ];
 
-/// Prefix of the prompt-instructed `favourite_<thing>` predicate family.
-const FAVOURITE_PREDICATE_PREFIX: &str = "favourite_";
-
-/// Whether a predicate name belongs to the open `favourite_<thing>` family
-/// (a non-empty thing after the prefix). Shared by the strict resolver and
-/// the list splitter so the family's shape is defined in one place.
-pub(crate) fn is_favourite_family_predicate(name: &str) -> bool {
-    name.strip_prefix(FAVOURITE_PREDICATE_PREFIX)
-        .is_some_and(|thing| !thing.is_empty())
-}
-
 /// Whether a predicate name is part of the canonical vocabulary the strict
-/// resolver accepts — the seeded [`CANONICAL_PREDICATES`] allow-list or the
-/// open `favourite_<thing>` family — after alias normalisation. Pure Rust
-/// check, no database access.
+/// extraction schema exposes after alias normalisation. Aliases live in the
+/// database and resolve through the taxonomy; this static check is used only
+/// for deterministic connector tests.
 ///
-/// Used by the email LLM connector layer (issue #412) so an LLM-emitted
-/// predicate can never auto-create a `relationship_types` row on first sync:
-/// the same [`CANONICAL_PREDICATES`] const the conversational boundary's
-/// strict resolver checks (plus the open `favourite_<thing>` family).
+/// Deterministic connector tests use this list to pin their registration
+/// surface. LLM extraction validates against the DB-backed schema and Rust
+/// re-checks the same list.
 pub fn is_canonical_predicate_name(name: &str) -> bool {
     let Some(normalized) = normalize_alias(name) else {
         return false;
     };
     CANONICAL_PREDICATES.contains(&normalized.as_str())
-        || is_favourite_family_predicate(&normalized)
 }
 
 impl KnowledgeGraph {
@@ -203,49 +181,22 @@ impl KnowledgeGraph {
     /// predicates outside the canonical allow-list instead of auto-creating
     /// rows (issue #401).
     ///
-    /// This is the strict counterpart to [`Self::ensure_relationship_type`]
-    /// used at the conversational extraction boundary. Resolution order:
+    /// This is the strict conversational extraction resolver. Resolution order:
     /// 1. Normalize the incoming name.
-    /// 2. The prompt-instructed `favourite_<thing>` family is accepted and
-    ///    resolved via [`Self::ensure_relationship_type`] (auto-creating the
-    ///    specific favourite on first use); a bare `favourite_` with no thing
-    ///    is rejected like any other unknown predicate.
-    /// 3. Query `relationship_type_aliases` for the normalized name; on a hit
-    ///    the canonical name must be in [`CANONICAL_PREDICATES`] — a type that
-    ///    was auto-created at runtime (e.g. a connector-emitted predicate) is
-    ///    rejected.
-    /// 4. Any other name is rejected with a clear error; no row is created.
+    /// 2. Query `relationship_type_aliases` for the normalized name; on a hit
+    ///    the target row must be emit-eligible in the closed taxonomy.
+    /// 3. Any other name is rejected with a clear error; no row is created.
     pub async fn resolve_canonical_relationship_type(
         &self,
         name: &str,
     ) -> Result<i16, KnowledgeError> {
-        let Some(normalized) = normalize_alias(name) else {
-            return Err(KnowledgeError::Validation(
-                "relationship type name cannot be empty".to_string(),
-            ));
-        };
-
-        if is_favourite_family_predicate(&normalized) {
-            return self.ensure_relationship_type(&normalized).await;
-        }
-
-        let Some(id) = self.resolve_relationship_type_alias(&normalized).await? else {
-            return Err(KnowledgeError::Validation(format!(
-                "predicate '{name}' is not a canonical relationship type; refusing to auto-create. Use a predicate from the extraction prompt's predicate standards or a registered alias."
-            )));
-        };
-
-        let canonical = self.relationship_type_name(id).await;
-        if canonical
-            .as_deref()
-            .is_some_and(|c| CANONICAL_PREDICATES.contains(&c))
-        {
-            return Ok(id);
-        }
-
-        Err(KnowledgeError::Validation(format!(
-            "predicate '{name}' resolves to an auto-created relationship type, not a canonical predicate; refusing to insert. Use a predicate from the extraction prompt's predicate standards or a registered alias."
-        )))
+        self.resolve_emit_eligible_relationship_type(name)
+            .await?
+            .ok_or_else(|| {
+                KnowledgeError::Validation(format!(
+                    "predicate '{name}' is not an emit-eligible taxonomy leaf; refusing to auto-create."
+                ))
+            })
     }
 
     /// Ensure a relationship type exists in the database, returning its stable id.
@@ -301,7 +252,7 @@ impl KnowledgeGraph {
 
         // 3. Alias miss: create new canonical type, then register self-alias.
         let id: i64 = sqlx::query_scalar(
-            "INSERT INTO relationship_types (name, description) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET name = relationship_types.name RETURNING id",
+            "INSERT INTO relationship_types (name, description, node_kind, emit_eligible) VALUES (?, ?, 'alias', FALSE) ON CONFLICT (name) DO UPDATE SET name = relationship_types.name RETURNING id",
         )
         .bind(&normalized)
         .bind(format!("Auto-created relationship_type: {}", normalized))
@@ -384,6 +335,30 @@ impl KnowledgeGraph {
             Ok(Some(id))
         } else {
             Ok(None)
+        }
+    }
+
+    /// Resolve only an emit-eligible controlled relationship leaf.
+    ///
+    /// This is the strict ingestion resolver: it resolves seeded canonical
+    /// names/aliases, but refuses query-only taxonomy nodes and never creates
+    /// a new row.
+    pub async fn resolve_emit_eligible_relationship_type(
+        &self,
+        name: &str,
+    ) -> Result<Option<i16>, KnowledgeError> {
+        let Some(id) = self.get_relationship_type_id(name).await? else {
+            return Ok(None);
+        };
+
+        let row: Option<(bool,)> =
+            sqlx::query_as("SELECT emit_eligible FROM relationship_types WHERE id = ?")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await?;
+        match row {
+            Some((true,)) => Ok(Some(id)),
+            _ => Ok(None),
         }
     }
 

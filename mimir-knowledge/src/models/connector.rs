@@ -37,6 +37,8 @@ pub struct Connector {
     /// Surfaced next to [`Self::facts_accepted`] so silent vocabulary drops
     /// are visible in `mimir connector list` / `status`.
     pub facts_dropped: i64,
+    /// Cumulative LLM-emitted facts staged for governance review (#468).
+    pub facts_staged: i64,
     pub last_sync_at: Option<DateTime<Utc>>,
     pub last_error: Option<String>,
     pub created_at: DateTime<Utc>,

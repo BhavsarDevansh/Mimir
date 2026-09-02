@@ -341,7 +341,7 @@ pub fn extraction_message() -> Message {
             classification: mimir_knowledge::extract::Classification::Explicit,
             subject: "Devansh".to_string(),
             subject_type: "Person".to_string(),
-            relationship_type: "favourite_colour".to_string(),
+            relationship_type: "prefers".to_string(),
             object: "blue".to_string(),
             object_is_entity: false,
             object_type: None,
@@ -374,7 +374,7 @@ pub fn extraction_message() -> Message {
 /// The user entity itself is created at daemon start, so persistence
 /// checks must observe the *fact*, not the entity's existence.
 #[allow(dead_code)]
-pub async fn has_favourite_colour(state: &Arc<AppState>) -> bool {
+pub async fn has_prefers_blue(state: &Arc<AppState>) -> bool {
     let search = state
         .knowledge_graph
         .search_entities("Devansh", 1)
@@ -393,9 +393,7 @@ pub async fn has_favourite_colour(state: &Arc<AppState>) -> bool {
             .knowledge_graph
             .relationship_type_name(fact.relationship_type_id)
             .await;
-        if pred.as_deref() == Some("favourite_colour")
-            && fact.object_literal.as_deref() == Some("blue")
-        {
+        if pred.as_deref() == Some("prefers") && fact.object_literal.as_deref() == Some("blue") {
             return true;
         }
     }
@@ -405,10 +403,10 @@ pub async fn has_favourite_colour(state: &Arc<AppState>) -> bool {
 /// Poll until the KG holds `favourite_colour=blue` for the user, or return
 /// false after a timeout.
 #[allow(dead_code)]
-pub async fn wait_for_favourite_colour(state: &Arc<AppState>) -> bool {
+pub async fn wait_for_prefers_blue(state: &Arc<AppState>) -> bool {
     let deadline = Instant::now() + std::time::Duration::from_secs(5);
     loop {
-        if has_favourite_colour(state).await {
+        if has_prefers_blue(state).await {
             return true;
         }
         if Instant::now() >= deadline {

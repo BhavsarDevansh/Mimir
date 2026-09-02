@@ -41,7 +41,9 @@ pub use kb::{
     ImportResponse, ProfileGroup, ProfileRequest, ProfileResponse, SourceRow,
 };
 pub use kb_maintenance::{
-    ConfirmFactResponse, ForgetRequest, ForgetResponse, PendingFactRow, PendingListResponse,
-    RejectFactRequest, RestoreRequest, RestoreResponse, TrashListResponse, TrashRow,
+    ConfirmFactResponse, ForgetRequest, ForgetResponse, MapUnrecognizedFactRequest,
+    MapUnrecognizedFactResponse, PendingFactRow, PendingListResponse, RejectFactRequest,
+    RejectUnrecognizedFactRequest, RestoreRequest, RestoreResponse, TrashListResponse, TrashRow,
+    UnrecognizedFactListResponse, UnrecognizedFactRow,
 };
 pub use kb_merges::{EntityMergeQueueRow, MergeApplyResponse, MergeQueueListResponse};

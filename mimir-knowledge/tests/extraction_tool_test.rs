@@ -710,7 +710,7 @@ async fn test_split_favourite_family_into_individual_facts() {
         "classification": "Explicit",
         "subject": "Devansh",
         "subject_type": "Person",
-        "relationship_type": "favourite_movie",
+        "relationship_type": "prefers",
         "object": "Inception, Interstellar",
         "object_is_entity": false,
         "categories": [],
@@ -726,7 +726,7 @@ async fn test_split_favourite_family_into_individual_facts() {
     assert_eq!(
         result.inserted.len(),
         2,
-        "expected 2 favourite_movie facts, got {:?}",
+        "expected 2 prefers facts, got {:?}",
         result.inserted
     );
     let objects: Vec<Option<&str>> = result

@@ -19,7 +19,8 @@ mod tests;
 pub use heatmap::handle_kb_heatmap;
 pub use maintenance::{
     KbForgetInput, handle_kb_category, handle_kb_confirm, handle_kb_forget, handle_kb_optimization,
-    handle_kb_pending, handle_kb_reject, handle_kb_reset, handle_kb_restore, handle_kb_trash,
+    handle_kb_pending, handle_kb_reject, handle_kb_reset, handle_kb_restore, handle_kb_staged,
+    handle_kb_trash,
 };
 pub use merges::{handle_kb_merge_apply, handle_kb_merge_keep, handle_kb_merges};
 pub use obsidian::{handle_kb_export, handle_kb_import};

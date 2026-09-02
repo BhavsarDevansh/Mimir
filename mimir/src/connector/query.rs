@@ -75,6 +75,7 @@ fn print_connector_table(connectors: &[ConnectorResponse]) {
         items: i64,
         accepted: i64,
         dropped: i64,
+        staged: i64,
         last_sync: String,
     }
 
@@ -91,6 +92,7 @@ fn print_connector_table(connectors: &[ConnectorResponse]) {
             items: c.item_count,
             accepted: c.facts_accepted,
             dropped: c.facts_dropped,
+            staged: c.facts_staged,
             last_sync: c.last_sync_at.as_deref().unwrap_or("-").to_string(),
         })
         .collect();
@@ -116,6 +118,7 @@ fn print_connector_detail(conn: &ConnectorResponse) {
     println!("Items:         {}", conn.item_count);
     println!("Facts accepted: {}", conn.facts_accepted);
     println!("Facts dropped: {}", conn.facts_dropped);
+    println!("Facts staged: {}", conn.facts_staged);
     if let Some(cursor) = &conn.sync_cursor {
         println!("Sync cursor:   {cursor}");
     }

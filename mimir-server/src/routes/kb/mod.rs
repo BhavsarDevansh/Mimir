@@ -10,6 +10,7 @@
 //! - `trash` — trash list / restore / empty.
 //! - `pending` — pending-confirmation list / confirm / reject.
 //! - `merges` — entity merge-queue review: list / apply / keep.
+//! - `staging` — unrecognized-predicate staging review: list / map / reject.
 //! - `export` / `import` — Obsidian export and import (issue #62).
 //! - `params` — query-string parameter structs.
 //! - `helpers` — shared parsing and name-resolution helpers.
@@ -26,6 +27,7 @@ mod optimization;
 mod params;
 mod pending;
 mod query;
+mod staging;
 mod trash;
 
 pub use browse::{kb_audit_handler, kb_browse_handler, kb_profile_handler};
@@ -41,4 +43,5 @@ pub use params::{
 };
 pub use pending::{kb_confirm_fact_handler, kb_pending_handler, kb_reject_fact_handler};
 pub use query::kb_query_handler;
+pub use staging::{kb_staged_list_handler, kb_staged_map_handler, kb_staged_reject_handler};
 pub use trash::{kb_trash_empty_handler, kb_trash_list_handler, kb_trash_restore_handler};

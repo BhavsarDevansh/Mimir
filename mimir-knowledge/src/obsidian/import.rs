@@ -40,6 +40,32 @@ pub struct ObsidianFile {
     pub content: String,
 }
 
+async fn allowed_object_type(
+    kg: &KnowledgeGraph,
+    relationship_type: &str,
+    subject_type: EntityType,
+) -> Result<EntityType, KnowledgeError> {
+    let Some(relationship_type_id) = kg
+        .resolve_emit_eligible_relationship_type(relationship_type)
+        .await?
+    else {
+        return Ok(EntityType::Concept);
+    };
+    let allowed_type: Option<i16> = sqlx::query_scalar(
+        "SELECT allowed_object_type_id \
+         FROM relationship_constraints \
+         WHERE relationship_type_id = ? AND allowed_subject_type_id = ? \
+         ORDER BY allowed_object_type_id LIMIT 1",
+    )
+    .bind(relationship_type_id)
+    .bind(subject_type as i16)
+    .fetch_optional(kg.pool())
+    .await?;
+    Ok(allowed_type
+        .and_then(|type_id| EntityType::try_from(type_id).ok())
+        .unwrap_or(EntityType::Concept))
+}
+
 /// What an import would change (or did change), in dry-run and apply modes.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ObsidianImportCounts {
@@ -361,6 +387,11 @@ async fn import_document(
         let (object_name, object_id) = plan_object(
             kg,
             &line.object,
+            &line.predicate,
+            subject.as_ref().map_or(
+                document.entity_type.unwrap_or(EntityType::Concept),
+                |entity| EntityType::try_from(entity.entity_type_id).unwrap_or(EntityType::Concept),
+            ),
             dry_run,
             &mut outcome.counts,
             planned_new_entities,
@@ -535,6 +566,8 @@ async fn import_document(
 async fn plan_object(
     kg: &KnowledgeGraph,
     object: &ObsidianObject,
+    relationship_type: &str,
+    subject_type: EntityType,
     dry_run: bool,
     counts: &mut ObsidianImportCounts,
     planned_new_entities: &mut HashSet<String>,
@@ -561,7 +594,8 @@ async fn plan_object(
             if dry_run {
                 Ok((name.clone(), None))
             } else {
-                let (entity, _) = resolve_or_create(kg, name, EntityType::Concept).await?;
+                let object_type = allowed_object_type(kg, relationship_type, subject_type).await?;
+                let (entity, _) = resolve_or_create(kg, name, object_type).await?;
                 Ok((entity.name.clone(), Some(entity.id)))
             }
         }

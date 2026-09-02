@@ -54,7 +54,7 @@ async fn test_kb_heatmap_returns_aggregates() {
 
     seed_fact(&state, "Alice", "works_at", 0.95).await;
     seed_fact(&state, "Bob", "works_at", 0.6).await;
-    seed_fact(&state, "Bob", "lives_in", 0.3).await;
+    seed_fact(&state, "Bob", "resides_in", 0.3).await;
 
     let app = mimir_server::build_app(state.clone());
     let response = app
@@ -90,7 +90,7 @@ async fn test_kb_heatmap_returns_aggregates() {
         .iter()
         .map(|p| (p.name.as_str(), p.count))
         .collect();
-    assert_eq!(predicates, vec![("works_at", 2), ("lives_in", 1)]);
+    assert_eq!(predicates, vec![("works_at", 2), ("resides_in", 1)]);
 
     let bands: Vec<(String, i64)> = resp
         .confidence_bands

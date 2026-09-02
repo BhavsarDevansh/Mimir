@@ -41,7 +41,7 @@ async fn memory_ranking_builds_schema_and_buckets_facts() {
     kg.insert_fact(rel).await.unwrap();
 
     // Insert a preference fact (category 300 = Food & Diet).
-    let mut pref = NewFact::new(user.id, "likes_food");
+    let mut pref = NewFact::new(user.id, "prefers");
     pref.object_literal = Some("croissants".to_string());
     pref.confidence = Some(0.85);
     pref.source_type = SourceType::UserEdit;
@@ -81,13 +81,13 @@ async fn memory_ranking_builds_schema_and_buckets_facts() {
             .any(|f| f.relationship_type == "has_partner")
     );
 
-    // Preferences should have likes_food.
+    // Preferences should have prefers.
     assert!(!schema.preferences.is_empty(), "expected preference facts");
     assert!(
         schema
             .preferences
             .iter()
-            .any(|f| f.relationship_type == "likes_food")
+            .any(|f| f.relationship_type == "prefers")
     );
 
     // Upcoming should have has_appointment.
@@ -276,20 +276,29 @@ async fn memory_ranking_assigns_highest_priority_bucket() {
     kg.insert_fact(rel).await.unwrap();
 
     // Preferences beat general (300 Health + 500 Work).
-    let mut pref = NewFact::new(user.id, "prefers_weather");
+    let mut pref = NewFact::new(user.id, "prefers");
     pref.object_literal = Some("mild".to_string());
     pref.confidence = Some(0.85);
     pref.source_type = SourceType::UserEdit;
     pref.category_ids = vec![300, 500];
     kg.insert_fact(pref).await.unwrap();
 
-    // General only.
-    let mut general = NewFact::new(user.id, "enjoys");
+    // General-only fact. This test intentionally uses a taxonomy-external
+    // type to verify bucketing without a deterministic domain fallback.
+    let general_type_id = kg.ensure_relationship_type("test_general").await.unwrap();
+    let mut general = NewFact::new(user.id, "test_general");
     general.object_literal = Some("hiking".to_string());
-    general.confidence = Some(0.85);
     general.source_type = SourceType::UserEdit;
-    general.category_ids = vec![500];
-    kg.insert_fact(general).await.unwrap();
+    general.category_ids = Vec::new();
+    mimir_knowledge::queries::fact::insert_fact(
+        kg.pool(),
+        &general,
+        general_type_id,
+        0.85,
+        Utc::now(),
+    )
+    .await
+    .unwrap();
 
     let schema = kg.build_memory_schema(user.id, 2500, 0.7).await.unwrap();
 
@@ -310,11 +319,11 @@ async fn memory_ranking_assigns_highest_priority_bucket() {
         "multi-category fact must land in Relationships"
     );
     assert!(
-        in_bucket(&schema.preferences, "prefers_weather"),
+        in_bucket(&schema.preferences, "prefers"),
         "multi-category fact must land in Preferences"
     );
     assert!(
-        in_bucket(&schema.general, "enjoys"),
+        in_bucket(&schema.general, "test_general"),
         "uncategorised-domain fact must land in General"
     );
 

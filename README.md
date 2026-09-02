@@ -37,7 +37,7 @@ Mimir is a **Rust workspace** with a modular, local-first design. Your data stay
 
 ### Key subsystems
 
-- **Knowledge graph** — entities, versioned facts, temporal reasoning, and live memory condensation, organised by a category-first ontology (predicate aliases for verb canonicalisation + Dewey categories with subtree retrieval). Regenerated on a schedule by the unified background scheduler.
+- **Knowledge graph** — entities, versioned facts, temporal reasoning, and live memory condensation, organised by a category-first ontology (predicate aliases for verb canonicalisation + Dewey categories with subtree retrieval). A DB-backed closed relationship tree, deterministic category rules, and durable unrecognized-fact staging keep extraction vocabulary governable without silent data loss. Regenerated on a schedule by the unified background scheduler.
 - **Learning** — a server-side hooks engine (`remember.chat`) extracts facts after each non-incognito turn, debounced per session and idle-gated; facts flow through a deterministic Rust pipeline (`normalize_and_insert`) that enforces confidence, overwrite, and sensitive-fact policy. An on-demand Librarian extraction API is also available.
 - **Retrieval agent** — ephemeral research agents that investigate the knowledge graph and conversation history on behalf of the main agent before answering complex questions.
 - **Events & reminders** — a lifecycle + recurrence overlay on facts that surfaces upcoming birthdays, appointments, deadlines, and tasks, with a deterministic scan job for auto-completion and recurring advancement.
@@ -77,6 +77,9 @@ mimir kb audit --entity "Alice" --change-type status_change
 
 # List sensitive facts awaiting confirmation
 mimir kb pending
+
+# Review facts staged for unrecognized relationship predicates
+mimir kb staged list
 
 # Confirm or reject a pending sensitive fact
 mimir kb confirm 42

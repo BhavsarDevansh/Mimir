@@ -23,7 +23,7 @@ If you approve, Mimir:
 3. Polls the same transport probe (socket connection or `/health`) every 200–1 000 ms with exponential backoff.
 4. Proceeds with your original command as soon as the daemon is ready.
 
-The total wait time is capped at **10 seconds**. If the daemon has not started by then, the command exits with a timeout error.
+The total wait time is capped at **10 seconds**. If the daemon has not started by then, the command exits with a timeout error. Automated tests inject a shorter timeout without changing this normal behaviour.
 
 ## Skipping the Prompt
 

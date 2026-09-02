@@ -181,10 +181,14 @@ impl ProcessSpawner for RealProcessSpawner {
 // DaemonGuard orchestrator
 // ---------------------------------------------------------------------------
 
+const DEFAULT_START_TIMEOUT: Duration = Duration::from_secs(10);
+const MIN_START_POLL_DELAY: Duration = Duration::from_millis(20);
+
 struct DaemonGuard {
     probe: Box<dyn Probe>,
     prompt_reader: Box<dyn PromptReader>,
     process_spawner: Box<dyn ProcessSpawner>,
+    start_timeout: Duration,
 }
 
 impl Default for DaemonGuard {
@@ -193,6 +197,7 @@ impl Default for DaemonGuard {
             probe: Box::new(TransportProbe),
             prompt_reader: Box::new(RealPromptReader),
             process_spawner: Box::new(RealProcessSpawner),
+            start_timeout: DEFAULT_START_TIMEOUT,
         }
     }
 }
@@ -230,10 +235,9 @@ impl DaemonGuard {
 
         // 4. Poll with exponential backoff.
         let start = Instant::now();
-        let mut delay = Duration::from_millis(200);
-        let timeout = Duration::from_secs(10);
+        let mut delay = (self.start_timeout / 50).max(MIN_START_POLL_DELAY);
 
-        while start.elapsed() < timeout {
+        while start.elapsed() < self.start_timeout {
             if self.probe.check(transport).await {
                 return Ok(());
             }
@@ -311,6 +315,15 @@ mod tests {
     }
 
     fn mock_guard(probe_results: Vec<bool>, prompt: &str, spawn_ok: bool) -> DaemonGuard {
+        mock_guard_with_timeout(probe_results, prompt, spawn_ok, DEFAULT_START_TIMEOUT)
+    }
+
+    fn mock_guard_with_timeout(
+        probe_results: Vec<bool>,
+        prompt: &str,
+        spawn_ok: bool,
+        start_timeout: Duration,
+    ) -> DaemonGuard {
         DaemonGuard {
             probe: Box::new(MockProbe {
                 results: std::sync::Mutex::new(probe_results),
@@ -321,6 +334,7 @@ mod tests {
             process_spawner: Box::new(MockProcessSpawner {
                 should_succeed: spawn_ok,
             }),
+            start_timeout,
         }
     }
 
@@ -446,12 +460,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_start_timeout() {
-        let guard = mock_guard(vec![false], "y\n", true);
+        let guard = mock_guard_with_timeout(vec![false], "y\n", true, Duration::from_millis(100));
         let mut tried = false;
         let transport = DaemonTransport::Tcp("http://127.0.0.1:1".to_string());
+
+        let started = Instant::now();
         let result = guard.ensure_running(&transport, &mut tried).await;
+
         assert!(matches!(result, Err(DaemonGuardError::StartTimeout)));
         assert!(tried);
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "the injectable start timeout should not use the 10 s production default"
+        );
     }
 
     #[tokio::test]

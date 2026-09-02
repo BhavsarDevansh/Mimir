@@ -2,6 +2,32 @@ mod common;
 use common::*;
 
 #[tokio::test]
+async fn test_status_memory_metrics_exclude_now_anchor() {
+    let mock = Arc::new(MockLlmClient::builder().build());
+    let (state, _temp) = test_state(mock).await;
+    let memory = "Measured";
+    state
+        .knowledge_graph
+        .set_condensed_memory(memory)
+        .await
+        .unwrap();
+    let app = mimir_server::build_app(state.clone());
+
+    let response = app
+        .oneshot(authed_request().uri("/status").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let status: StatusResponse = serde_json::from_slice(&bytes).unwrap();
+    assert!(status.memory_exists);
+    assert_eq!(status.memory_chars, memory.chars().count());
+}
+
+#[tokio::test]
 async fn test_status_returns_ok() {
     let mock = Arc::new(MockLlmClient::builder().build());
     let (state, _temp) = test_state(mock).await;

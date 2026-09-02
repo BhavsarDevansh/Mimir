@@ -53,6 +53,7 @@ The Knowledge Graph stores **everything** Mimir has learned — every fact, at f
 
 - No need to manually edit memory — Mimir builds your memory automatically from conversations
 - The memory block is always current (regenerated when facts change, gated by scheduler)
+- Every LLM-facing memory view starts with a current `Now:` timestamp, so the model can reason about how old an appointment or event is without guessing
 - You can still inspect what Mimir knows via `mimir memory` and `mimir kb query`
 - If you want a fact pinned or deprioritised, that will be supported in a future update
 

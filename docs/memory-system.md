@@ -60,7 +60,7 @@ The hook's idle gate ensures condensation only runs when the shared LLM worker p
 
 ### Context Injection
 
-The condensed-memory system prompt is composed at session creation for non-incognito sessions, combined with an upcoming events section, and reused for the session's lifetime; incognito requests build a fresh prompt per request. The prompt phrasing is "Core facts about the user (condensed subset — not a complete picture; treat as starting context, not exhaustive)", signalling to the LLM that the subset is curated and it should use KG tools if it needs more.
+The condensed-memory system prompt is composed at session creation for non-incognito sessions, combined with an upcoming events section, and reused for the session's lifetime; incognito requests build a fresh prompt per request. The prompt phrasing is "Core facts about the user (condensed subset — not a complete picture; treat as starting context, not exhaustive)", signalling to the LLM that the subset is curated and it should use KG tools if it needs more. At composition time, the prompt starts with a single `Now:` line in RFC 3339 UTC plus weekday/date prose (for example, `Now: 2026-08-23T21:30:00Z (Sunday 23 August 2026)`). The anchor is request-local: native and OpenAI-compatible turns refresh that one line for existing sessions, while `/memory` composes it on every read; the condensation cache itself remains timestamp-free.
 
 ## Configuration
 

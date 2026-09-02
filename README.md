@@ -63,7 +63,7 @@ mimir chat
 # Check daemon status and configuration
 mimir status
 
-# View the live condensed memory block
+# View the live condensed memory block, including the current Now timestamp
 mimir memory
 
 # List available personality presets

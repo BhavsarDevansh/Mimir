@@ -123,6 +123,13 @@ async fn test_v1_chat_blocking_basic_shape() {
     );
     let (status, _headers, value) = post_v1_chat(&app, &body).await;
     assert_eq!(status, StatusCode::OK);
+    let calls = mock.chat_calls();
+    assert!(!calls.is_empty(), "expected one LLM chat call");
+    let system = calls[0]
+        .iter()
+        .find(|m| m.role == "system")
+        .expect("system prompt present");
+    assert_current_now_stamp(&system.content);
     let response: OpenAiChatResponse = serde_json::from_value(value).unwrap();
     assert!(response.id.starts_with("chatcmpl-"), "id: {}", response.id);
     assert_eq!(response.object, "chat.completion");
@@ -156,6 +163,7 @@ async fn test_v1_chat_same_user_resumes_one_session() {
     );
     let (status, _, _) = post_v1_chat(&app, &first).await;
     assert_eq!(status, StatusCode::OK);
+    tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
 
     let second = chat_body(
         "gpt-4o",
@@ -170,6 +178,35 @@ async fn test_v1_chat_same_user_resumes_one_session() {
     assert_eq!(sessions.len(), 1, "same user key must resume one session");
     let calls = mock.chat_calls();
     assert_eq!(calls.len(), 2);
+    let first_stamp = calls[0]
+        .iter()
+        .find(|m| m.role == "system")
+        .expect("first OpenAI turn has a system prompt")
+        .content
+        .lines()
+        .find_map(|line| line.strip_prefix("Now: "))
+        .expect("first OpenAI turn carries a Now stamp")
+        .to_string();
+    let second_system = calls[1]
+        .iter()
+        .find(|m| m.role == "system")
+        .expect("second OpenAI turn has a system prompt");
+    assert_current_now_stamp(&second_system.content);
+    assert_ne!(
+        first_stamp,
+        second_system
+            .content
+            .lines()
+            .find_map(|line| line.strip_prefix("Now: "))
+            .expect("second OpenAI turn carries a Now stamp"),
+        "existing OpenAI sessions must refresh the Now stamp"
+    );
+    assert_eq!(
+        second_system.content.matches("Now: ").count(),
+        1,
+        "refreshing the stamp must not duplicate it: {}",
+        second_system.content
+    );
     let second_conversation = &calls[1];
     assert!(
         second_conversation

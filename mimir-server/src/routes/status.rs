@@ -52,7 +52,6 @@ pub async fn status_handler(State(state): State<Arc<AppState>>) -> Json<StatusRe
     } else {
         format!("{}\n\n{}", condensed, upcoming)
     };
-
     let memory_chars = memory_text.chars().count();
     let memory_exists = !memory_text.is_empty();
 

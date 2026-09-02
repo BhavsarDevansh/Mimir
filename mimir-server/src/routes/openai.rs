@@ -295,6 +295,7 @@ async fn resolve_openai_turn(
     }
     let input = extract_turn(&req.messages).map_err(TurnError::into_response)?;
 
+    let now = state.knowledge_graph.now();
     let memory = build_memory_context(state).await;
     let cfg = state.config.snapshot().await;
 
@@ -347,7 +348,7 @@ async fn resolve_openai_turn(
     )
     .map_err(TurnError::into_response)?;
 
-    let system_prompt = build_system_prompt(state, &personality, &memory).await;
+    let system_prompt = build_system_prompt(state, &personality, &memory, now).await;
     let session_id = state
         .context_manager
         .resolve_openai_session(user_key, system_prompt)
@@ -431,6 +432,11 @@ async fn resolve_openai_turn(
             return Err(error::openai_context_error(e));
         }
     };
+
+    let mut conversation = conversation;
+    if let Some(system) = conversation.first_mut() {
+        system.content = mimir_knowledge::queries::memory::refresh_now_line(&system.content, now);
+    }
 
     Ok(OpenAiTurn {
         state: Arc::clone(state),

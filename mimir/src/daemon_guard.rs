@@ -249,6 +249,10 @@ impl DaemonGuard {
                 Err(_) => return Err(DaemonGuardError::StartTimeout),
             }
 
+            let remaining = match self.start_timeout.checked_sub(start.elapsed()) {
+                Some(remaining) if !remaining.is_zero() => remaining,
+                _ => break,
+            };
             tokio::time::sleep(delay.min(remaining)).await;
             delay = (delay * 2).min(Duration::from_secs(1));
         }
@@ -322,11 +326,12 @@ mod tests {
         }
     }
 
-    struct SlowProbe {
+    struct DelayedFalseProbe {
         completed_fast_probe: std::sync::atomic::AtomicBool,
+        delay: Duration,
     }
 
-    impl Probe for SlowProbe {
+    impl Probe for DelayedFalseProbe {
         fn check<'a>(
             &'a self,
             _transport: &'a DaemonTransport,
@@ -338,7 +343,7 @@ mod tests {
                 Box::pin(async { false })
             } else {
                 Box::pin(async {
-                    tokio::time::sleep(Duration::from_millis(150)).await;
+                    tokio::time::sleep(self.delay).await;
                     false
                 })
             }
@@ -369,10 +374,11 @@ mod tests {
         }
     }
 
-    fn slow_probe_guard(start_timeout: Duration) -> DaemonGuard {
+    fn slow_probe_guard(start_timeout: Duration, probe_delay: Duration) -> DaemonGuard {
         DaemonGuard {
-            probe: Box::new(SlowProbe {
+            probe: Box::new(DelayedFalseProbe {
                 completed_fast_probe: std::sync::atomic::AtomicBool::new(true),
+                delay: probe_delay,
             }),
             prompt_reader: Box::new(MockPromptReader {
                 response: "y\n".to_string(),
@@ -523,7 +529,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_start_timeout_caps_slow_probe() {
-        let guard = slow_probe_guard(Duration::from_millis(20));
+        let guard = slow_probe_guard(Duration::from_millis(20), Duration::from_millis(150));
         let mut tried = false;
         let transport = DaemonTransport::Tcp("http://127.0.0.1:1".to_string());
 
@@ -535,6 +541,23 @@ mod tests {
         assert!(
             started.elapsed() < Duration::from_millis(100),
             "the start timeout must cap a slow probe, not wait for it to finish"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_start_timeout_recalculates_deadline_after_slow_probe() {
+        let guard = slow_probe_guard(Duration::from_millis(100), Duration::from_millis(90));
+        let mut tried = false;
+        let transport = DaemonTransport::Tcp("http://127.0.0.1:1".to_string());
+
+        let started = Instant::now();
+        let result = guard.ensure_running(&transport, &mut tried).await;
+
+        assert!(matches!(result, Err(DaemonGuardError::StartTimeout)));
+        assert!(tried);
+        assert!(
+            started.elapsed() < Duration::from_millis(120),
+            "the retry delay must not use remaining time measured before a slow probe"
         );
     }
 

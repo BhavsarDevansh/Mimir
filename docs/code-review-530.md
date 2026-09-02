@@ -14,7 +14,9 @@
 | Versioning | The workspace version needed a patch bump for the test-performance fix. | Low | Bumped the workspace version from `0.153.10` to `0.153.11`. |
 | Correctness | The polling loop allowed one slow probe to finish after the start budget had expired, so the documented cap could overshoot by up to the probe timeout. | High | Bounded each poll with `tokio::time::timeout`, returned immediately on probe-time expiry, and capped the following sleep to the remaining budget. |
 | Testability | The timeout tests did not cover a probe that outlived the start budget. | Low | Added `test_start_timeout_caps_slow_probe` with a fast initial probe followed by a slow polling probe. |
-| Documentation | The daemon-guard test table and binary test count omitted the probe, child-environment, and new timeout tests. | Low | Expanded the test table and updated the count to 12. |
+| Correctness | The retry delay used remaining time measured before a failed probe, allowing a near-deadline probe to schedule a sleep past the start budget. | High | Recalculated the remaining budget after the probe and skipped the sleep once the deadline had expired. |
+| Testability | The timeout tests did not cover a delayed probe that returned `false` before the deadline. | Low | Added `test_start_timeout_recalculates_deadline_after_slow_probe` with a 90 ms probe and a 100 ms budget. |
+| Documentation | The daemon-guard test table and binary test count omitted the probe, child-environment, and new timeout tests. | Low | Expanded the test table and updated the count to 13. |
 
 ## Verification
 

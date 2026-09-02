@@ -1,6 +1,6 @@
 //! Entity CRUD and name/alias search.
 
-use sqlx::SqlitePool;
+use sqlx::{QueryBuilder, Sqlite, SqlitePool};
 
 use crate::KnowledgeError;
 use crate::models::entity::{Entity, EntityType};
@@ -67,17 +67,37 @@ pub async fn create_entity(
         }
     };
 
-    // Insert aliases atomically within the same transaction.
-    for alias in aliases {
-        sqlx::query("INSERT OR IGNORE INTO entity_aliases (entity_id, alias) VALUES (?, ?)")
-            .bind(entity.id)
-            .bind(alias)
+    // Insert all aliases atomically within the same transaction. SQL shapes
+    // vary with alias count, so do not cache them as prepared statements.
+    for mut query_builder in alias_insert_builders(entity.id, aliases) {
+        query_builder
+            .build()
+            .persistent(false)
             .execute(&mut *tx)
             .await?;
     }
 
     tx.commit().await?;
     Ok(entity)
+}
+
+/// Maximum aliases per statement. Each row binds twice, staying within the
+/// conservative 999-parameter limit supported by older SQLite builds.
+const ALIAS_INSERT_BATCH_SIZE: usize = 499;
+
+/// Build idempotent multi-row inserts for caller-supplied aliases.
+fn alias_insert_builders(
+    entity_id: i32,
+    aliases: &[&str],
+) -> impl Iterator<Item = QueryBuilder<Sqlite>> {
+    aliases.chunks(ALIAS_INSERT_BATCH_SIZE).map(move |aliases| {
+        let mut query_builder =
+            QueryBuilder::new("INSERT OR IGNORE INTO entity_aliases (entity_id, alias) ");
+        query_builder.push_values(aliases.iter().copied(), |mut row, alias| {
+            row.push_bind(entity_id).push_bind(alias);
+        });
+        query_builder
+    })
 }
 
 /// Retrieve an entity by primary key.
@@ -386,4 +406,33 @@ pub async fn delete_entity(pool: &SqlitePool, id: i32) -> Result<(), KnowledgeEr
         .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ALIAS_INSERT_BATCH_SIZE, alias_insert_builders};
+    use sqlx::Execute;
+
+    #[test]
+    fn alias_insert_stays_within_sqlite_bind_limit() {
+        const { assert!(ALIAS_INSERT_BATCH_SIZE * 2 <= 999) }
+        let alias_names: Vec<String> = (0..ALIAS_INSERT_BATCH_SIZE + 1)
+            .map(|index| format!("Alias {index}"))
+            .collect();
+        let aliases: Vec<&str> = alias_names.iter().map(String::as_str).collect();
+        let mut query_builders = alias_insert_builders(7, &aliases);
+
+        assert_eq!(
+            query_builders.next().unwrap().build().sql().as_str(),
+            format!(
+                "INSERT OR IGNORE INTO entity_aliases (entity_id, alias) VALUES {}",
+                "(?, ?), ".repeat(ALIAS_INSERT_BATCH_SIZE - 1) + "(?, ?)"
+            )
+        );
+        assert_eq!(
+            query_builders.next().unwrap().build().sql().as_str(),
+            "INSERT OR IGNORE INTO entity_aliases (entity_id, alias) VALUES (?, ?)"
+        );
+        assert!(query_builders.next().is_none());
+    }
 }

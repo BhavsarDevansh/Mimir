@@ -202,6 +202,10 @@ Migrations are strictly ordered by foreign-key dependencies:
 - **Foreign keys:** Enabled on every connection.
 - **Max connections:** 5 (SQLite single-writer; pool smooths async access).
 
+### Write Batching
+
+Entity creation batches aliases into multi-row `INSERT OR IGNORE` statements inside the entity transaction (`mimir-knowledge/src/queries/entity/crud.rs`). Typical entities use a single statement; batches are capped at 499 aliases because each alias binds an entity ID and alias value, keeping the statement within the 999-parameter limit supported by older SQLite builds. The statements are bound rather than interpolated, are marked non-persistent because their SQL shape varies with alias count, and are skipped when an entity has no aliases.
+
 ---
 
 ## Full-Text Search

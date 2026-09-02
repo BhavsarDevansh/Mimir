@@ -1,6 +1,6 @@
 //! Entity CRUD and name/alias search.
 
-use sqlx::SqlitePool;
+use sqlx::{QueryBuilder, Sqlite, SqlitePool};
 
 use crate::KnowledgeError;
 use crate::models::entity::{Entity, EntityType};
@@ -67,17 +67,28 @@ pub async fn create_entity(
         }
     };
 
-    // Insert aliases atomically within the same transaction.
-    for alias in aliases {
-        sqlx::query("INSERT OR IGNORE INTO entity_aliases (entity_id, alias) VALUES (?, ?)")
-            .bind(entity.id)
-            .bind(alias)
+    // Insert all aliases atomically within the same transaction. The SQL shape
+    // varies with alias count, so do not cache it as a prepared statement.
+    if !aliases.is_empty() {
+        alias_insert_builder(entity.id, aliases)
+            .build()
+            .persistent(false)
             .execute(&mut *tx)
             .await?;
     }
 
     tx.commit().await?;
     Ok(entity)
+}
+
+/// Build one idempotent multi-row insert for every caller-supplied alias.
+fn alias_insert_builder(entity_id: i32, aliases: &[&str]) -> QueryBuilder<Sqlite> {
+    let mut query_builder =
+        QueryBuilder::new("INSERT OR IGNORE INTO entity_aliases (entity_id, alias) ");
+    query_builder.push_values(aliases.iter().copied(), |mut row, alias| {
+        row.push_bind(entity_id).push_bind(alias);
+    });
+    query_builder
 }
 
 /// Retrieve an entity by primary key.
@@ -386,4 +397,24 @@ pub async fn delete_entity(pool: &SqlitePool, id: i32) -> Result<(), KnowledgeEr
         .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::alias_insert_builder;
+    use sqlx::Execute;
+
+    #[test]
+    fn alias_insert_uses_single_batched_statement() {
+        let aliases = ["Alice", "A.", "Ali"];
+
+        let mut query_builder = alias_insert_builder(7, &aliases);
+        let query = query_builder.build();
+
+        assert_eq!(
+            query.sql().as_str(),
+            "INSERT OR IGNORE INTO entity_aliases (entity_id, alias) \
+             VALUES (?, ?), (?, ?), (?, ?)"
+        );
+    }
 }

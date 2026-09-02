@@ -971,12 +971,17 @@ async fn shutdown_awaits_an_in_flight_cycle() {
 
     // The cycle future must be gone (fully cancelled) by the time `shutdown`
     // returns — a detached cycle would still be blocked on the gate here.
-    let dropped_future = dropped_notify.notified();
-    tokio::pin!(dropped_future);
-    while !dropped.load(std::sync::atomic::Ordering::SeqCst) {
-        dropped_future.as_mut().await;
-        dropped_future.set(dropped_notify.notified());
-    }
+    let wait_for_drop = async {
+        let dropped_future = dropped_notify.notified();
+        tokio::pin!(dropped_future);
+        while !dropped.load(std::sync::atomic::Ordering::SeqCst) {
+            dropped_future.as_mut().await;
+            dropped_future.set(dropped_notify.notified());
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(5), wait_for_drop)
+        .await
+        .expect("shutdown must drop the in-flight cycle within five seconds");
     assert!(
         dropped.load(std::sync::atomic::Ordering::SeqCst),
         "shutdown must not return while the in-flight cycle task is alive"

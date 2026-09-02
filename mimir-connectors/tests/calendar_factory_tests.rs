@@ -23,6 +23,30 @@ mod common;
 use common::*;
 
 // ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn wait_until_some_times_out_while_probe_is_pending() {
+    let result = tokio::time::timeout(
+        Duration::from_millis(200),
+        tokio::spawn(async {
+            wait_until_some(
+                || async { std::future::pending::<Option<()>>().await },
+                Duration::from_millis(50),
+            )
+            .await
+        }),
+    )
+    .await;
+
+    assert!(
+        matches!(result, Ok(Err(join_error)) if join_error.is_panic()),
+        "a pending probe must fail the helper deadline instead of hanging"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
 

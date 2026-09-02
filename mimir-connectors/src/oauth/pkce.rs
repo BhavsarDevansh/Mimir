@@ -587,7 +587,6 @@ mod tests {
         // the flow must still accept the real callback.
         let callback_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
         let _stalled = TcpStream::connect(callback_addr).await.unwrap();
-        let _ = listener.accept().await.unwrap();
 
         let mut callback_connection = TcpStream::connect(callback_addr).await.unwrap();
         callback_connection

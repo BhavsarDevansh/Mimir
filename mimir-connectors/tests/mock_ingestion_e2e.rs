@@ -285,12 +285,18 @@ async fn mock_tombstones_trash_kb_facts_and_are_idempotent() {
     )
     .await;
 
-    // Give re-staged tombstones a cycle to prove they do not error and the
-    // facts do not resurrect. The recorder exposes the actual completion of
-    // that third cycle.
-    tokio::time::timeout(Duration::from_secs(5), recorder.wait_for_completed(3))
-        .await
-        .expect("third sync did not complete");
+    // Trigger one explicit polling cycle and await its full completion to
+    // prove re-staged tombstones do not error and the facts do not resurrect.
+    // This intentionally does not assert that it is exactly the third sync:
+    // a background cycle may already have started, and `trigger_sync` queues
+    // behind it so the assertions always observe a completed re-report.
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        supervisor.trigger_sync(row.id, SyncOptions::default()),
+    )
+    .await
+    .expect("triggered sync did not complete")
+    .expect("triggered sync failed");
     let alice = entity_id(&kg, "Alice Tomb").await.expect("entity persists");
     assert!(
         kg.get_facts_by_subject(alice, 100)

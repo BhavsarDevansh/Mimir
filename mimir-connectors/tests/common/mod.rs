@@ -264,13 +264,21 @@ where
 {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
-        if let Some(value) = probe().await {
-            return value;
+        match tokio::time::timeout_at(deadline, probe()).await {
+            Ok(Some(value)) => return value,
+            Ok(None) => {}
+            Err(_) => panic!("wait_until_some timed out after {timeout:?}"),
         }
-        if tokio::time::Instant::now() >= deadline {
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
             panic!("wait_until_some timed out after {timeout:?}");
         }
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        tokio::time::sleep(
+            deadline
+                .saturating_duration_since(now)
+                .min(Duration::from_millis(10)),
+        )
+        .await;
     }
 }
 

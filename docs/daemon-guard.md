@@ -53,6 +53,8 @@ pub async fn ensure_daemon_running(
 - **Why `std::process::Command` instead of `tokio::process::Command`?** The spawn is fire-and-forget; we do not await the child. The synchronous `std` API is simpler and avoids adding the `process` feature to `tokio` in production.
 - **Why pass `already_tried` explicitly?** A `static AtomicBool` would be global, which complicates parallel test execution. An explicit `bool` parameter makes the dependency visible and trivially testable.
 - **Why trait-based internals?** `Probe`, `PromptReader`, and `ProcessSpawner` are internal traits that let unit tests inject mock behaviour without relying on real HTTP servers or interactive stdin. The public API remains a plain async function.
+- **Why is the start timeout injectable?** The internal `DaemonGuard` stores `start_timeout`, preserving the production default of 10 s while tests inject a short budget instead of waiting through the full timeout. The initial poll delay is derived as one-fiftieth of that budget (minimum 20 ms), so the normal 10 s flow keeps its existing 200 ms initial backoff.
+- **Why is the deadline recalculated before sleeping?** A probe's elapsed time can consume part of the start budget. Recalculating after the probe bounds the next sleep by the current remaining time, so a failed probe cannot schedule a delay beyond the overall deadline.
 
 ## CLI base URL
 
@@ -64,12 +66,18 @@ Unit tests in `mimir/src/daemon_guard.rs` cover:
 
 | Test | Scenario |
 |------|----------|
+| `daemon_command_strips_connector_secrets_from_child_env` | The spawned daemon command removes connector password and token environment variables. |
 | `test_already_running` | Daemon is up on first probe; returns `Ok(())` without prompting or spawning. |
 | `test_prompt_yes_spawns_and_polls` | Daemon is down; user types `y`; mock spawn succeeds; poll eventually succeeds. |
+| `test_http_probe_success` | A live TCP health endpoint reports success. |
+| `test_http_probe_failure` | An unreachable TCP endpoint reports failure. |
+| `test_unix_probe_connects_to_live_socket_and_rejects_stale` | A live Unix socket reports success; a stale socket file reports failure. |
 | `test_prompt_no` | Daemon is down; user types `n`; returns `Prompt` error. |
 | `test_prompt_eof` | Daemon is down; stdin is empty/EOF; returns `Prompt` error. |
 | `test_spawn_failure` | User types `y`; mock spawn fails; returns `Spawn` error. |
-| `test_start_timeout` | User types `y`; mock spawn succeeds; daemon never becomes ready; returns `StartTimeout`. |
+| `test_start_timeout` | User types `y`; mock spawn succeeds; a 100 ms injected start budget expires in under 1 s and returns `StartTimeout`. |
+| `test_start_timeout_caps_slow_probe` | A slow probe is cut off by the injected start budget rather than delaying expiry until the probe finishes. |
+| `test_start_timeout_recalculates_deadline_after_slow_probe` | A slow probe returns `false` near the deadline; the next retry delay is bounded by the refreshed remaining budget. |
 | `test_already_tried_skips_prompt` | `already_tried` is `true` on entry; skips prompt and returns `StartTimeout`. |
 
 Additionally, `mimir/tests/cli_tests.rs` contains binary-level integration tests that verify the daemon guard fires when the server is not running.

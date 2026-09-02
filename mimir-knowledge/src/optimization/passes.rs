@@ -21,6 +21,13 @@ use crate::KnowledgeGraph;
 
 use super::{OptimizationRunner, PassSummary};
 
+struct MergeCandidate {
+    keep_id: i32,
+    duplicate_id: i32,
+    keep_confidence: f32,
+    duplicate_confidence: f32,
+}
+
 impl<'a> OptimizationRunner<'a> {
     pub(super) async fn deterministic_dedup(&self) -> Result<PassSummary, crate::KnowledgeError> {
         let pairs = sqlx::query(
@@ -30,8 +37,8 @@ impl<'a> OptimizationRunner<'a> {
              JOIN facts b ON b.id > a.id \
               AND b.subject_id = a.subject_id \
               AND b.relationship_type_id = a.relationship_type_id \
-              AND COALESCE(b.object_id, -1) = COALESCE(a.object_id, -1) \
-              AND COALESCE(b.object_literal, '') = COALESCE(a.object_literal, '') \
+              AND b.object_id IS a.object_id \
+              AND b.object_literal IS a.object_literal \
               AND (a.valid_from IS NULL OR a.valid_until IS NULL OR a.valid_from < a.valid_until) \
               AND (b.valid_from IS NULL OR b.valid_until IS NULL OR b.valid_from < b.valid_until) \
               AND (b.valid_from IS NULL OR a.valid_until IS NULL OR b.valid_from < a.valid_until) \
@@ -49,48 +56,46 @@ impl<'a> OptimizationRunner<'a> {
         let now = self.kg.now();
         let mut merged = 0;
         let mut seen = HashSet::new();
-        let merge_candidates: Vec<(i32, i32, f32, f32)> = pairs
+        let merge_candidates: Vec<MergeCandidate> = pairs
             .iter()
             .map(|row| {
-                Ok((
-                    row.try_get::<i32, _>("keep_id")?,
-                    row.try_get::<i32, _>("duplicate_id")?,
-                    row.try_get::<f32, _>("keep_confidence")?,
-                    row.try_get::<f32, _>("duplicate_confidence")?,
-                ))
+                Ok(MergeCandidate {
+                    keep_id: row.try_get("keep_id")?,
+                    duplicate_id: row.try_get("duplicate_id")?,
+                    keep_confidence: row.try_get("keep_confidence")?,
+                    duplicate_confidence: row.try_get("duplicate_confidence")?,
+                })
             })
             .collect::<Result<_, crate::KnowledgeError>>()?;
         let mut confidences: HashMap<i32, f32> = merge_candidates
             .iter()
-            .flat_map(
-                |&(keep_id, duplicate_id, keep_confidence, duplicate_confidence)| {
-                    [
-                        (keep_id, keep_confidence),
-                        (duplicate_id, duplicate_confidence),
-                    ]
-                },
-            )
+            .flat_map(|candidate| {
+                [
+                    (candidate.keep_id, candidate.keep_confidence),
+                    (candidate.duplicate_id, candidate.duplicate_confidence),
+                ]
+            })
             .collect();
         let mut tx = self.kg.pool().begin().await?;
-        for &(keep_id, duplicate_id, _, _) in &merge_candidates {
-            if seen.contains(&keep_id) {
+        for candidate in &merge_candidates {
+            if seen.contains(&candidate.keep_id) {
                 continue;
             }
-            if !seen.insert(duplicate_id) {
+            if !seen.insert(candidate.duplicate_id) {
                 continue;
             }
-            let keep_confidence = confidences[&keep_id];
-            let duplicate_confidence = confidences[&duplicate_id];
+            let keep_confidence = confidences[&candidate.keep_id];
+            let duplicate_confidence = confidences[&candidate.duplicate_id];
             let boosted = merge_fact_pair(
                 &mut tx,
                 now,
-                keep_id,
-                duplicate_id,
+                candidate.keep_id,
+                candidate.duplicate_id,
                 keep_confidence,
                 duplicate_confidence,
             )
             .await?;
-            confidences.insert(keep_id, boosted);
+            confidences.insert(candidate.keep_id, boosted);
             merged += 1;
         }
         tx.commit().await?;

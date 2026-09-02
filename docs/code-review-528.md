@@ -31,13 +31,18 @@
 | Dimension | Finding | Severity | Action |
 |---|---|---|---|
 | Correctness | The deterministic-dedup candidate query used closed interval comparisons, while fact insertion uses half-open intervals and excludes empty ranges. | Medium | Replaced sentinel `COALESCE` comparisons with explicit half-open SQL predicates and added an empty-interval regression test. |
+| Correctness | `COALESCE` object comparisons treated SQL `NULL` and an empty literal as the same object. | Medium | Switched to null-aware `IS` comparisons and added a regression test. |
+| Code quality | The candidate rows were represented by an opaque four-field tuple. | Low | Replaced the tuple with a local `MergeCandidate` struct. |
+| DRY compliance | Tests repeated direct fact-and-source seeding SQL. | Low | Extracted an `insert_unmanaged_fact` test helper. |
+| Correctness | The review documentation claimed pass-level rollback coverage, but no test exercised a failure after the first merge. | Low | Added a fault-injection regression test that verifies the first merge, confidence boost, provenance transfer, and dependency writes roll back together. |
 
 ## Actions Taken During Review
 
 - Replaced per-pair transactions with one pass-level transaction and moved both confidence values into the candidate query.
 - Tracked the current keeper confidence in Rust so successive duplicate merges do not restart from stale snapshots.
-- Added regression coverage for multiple duplicate merges, provenance transfer, supersession dependencies, and empty intervals.
+- Added regression coverage for multiple duplicate merges, provenance transfer, supersession dependencies, pass-level rollback, and empty intervals.
 - Documented the v0.153.9 benchmark delta and updated technical and user-facing optimization documentation.
+- Filed #548 for the pre-existing semantic-dedup object comparison issue outside this change set.
 - Re-ran formatting, the targeted optimization suite, the workspace test suite, the full workspace Clippy check with warnings denied, and the targeted dedup benchmark.
 
 The final review returned zero open findings.

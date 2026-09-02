@@ -397,10 +397,13 @@ async fn migration_059_uses_subject_relationship_index_for_overlap_scan() {
     let plans: Vec<(i64, i64, i64, String)> = sqlx::query_as(
         "EXPLAIN QUERY PLAN \
          SELECT id FROM facts \
-         WHERE subject_id = ? AND relationship_type_id = ?",
+         WHERE subject_id = ? AND relationship_type_id = ? \
+           AND (object_id IS ?) AND (object_literal IS ?)",
     )
     .bind(1i32)
     .bind(1i16)
+    .bind(None::<i32>)
+    .bind(None::<String>)
     .fetch_all(kg.pool())
     .await
     .unwrap();

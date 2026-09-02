@@ -137,7 +137,7 @@ The performance investigation (2026-08-26) added four benchmark suites that quan
 
 | Benchmark | What it measures | Baseline | Issue #524 |
 |-----------|------------------|----------|------------|
-| `kg_schema_init` | Fresh `KnowledgeGraph::init` incl. all 59 migrations (per-test setup cost) | 65.8 ms | 62.6 ms |
+| `kg_schema_init` | Fresh `KnowledgeGraph::init` incl. all 58 migrations (per-test setup cost) | 65.8 ms | 62.6 ms |
 | `kg_fact_insert_small_graph` | 10 fact inserts into a 6-entity graph (~0.92 ms/insert) | 9.15 ms | 7.48 ms |
 | `kg_fact_insert_same_subject_growth` | 1 insert with 30 pre-existing facts on the subject (overlap-scan cost) | 2.43 ms | 2.01 ms |
 | `kg_entity_create_with_aliases` | 5 entity creates with 3 aliases each | 2.41 ms | 2.22 ms |

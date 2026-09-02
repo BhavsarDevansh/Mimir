@@ -53,7 +53,7 @@ The HTTP API renders `fact_status_id`, `source_type_id`, `change_type_id`, `chan
 
 ## Temporal Logic
 
-When inserting a fact with the same `subject_id + predicate_id` as existing facts, the system evaluates temporal overlap:
+When inserting a fact with the same `subject_id + relationship_type_id` as existing facts, the system evaluates temporal overlap:
 
 1. **Non-overlapping ranges** — both facts remain `Active` (timeline).
 2. **Old open-ended + new explicit start** — the old fact’s `valid_until` is closed at `now()`; the new fact is `Active`.

@@ -72,7 +72,7 @@ pub enum Job {
 
 - `LlmClient::new(config)` — async constructor that creates a default pool with 1 worker (spawned inside the Tokio runtime).
 - `LlmClient::with_pool(pool)` — injects a custom pool (useful in tests).
-- `LlmClient::new_direct(config)` — crate-internal constructor that bypasses the pool (used by workers).
+- `LlmClient::new_direct(config, retry_config)` — crate-internal constructor that bypasses the pool (used by workers).
 - `LlmBackend::with_model_override` / `with_temperature_override` / `with_max_tokens_override` — return pooled clones that record the override on the client; the next enqueue carries it in the job payload.
 
 ## Future Configuration

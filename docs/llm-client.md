@@ -78,7 +78,11 @@ Constructs a client from configuration. Must be called from within a Tokio runti
 
 The underlying `reqwest::Client` uses a 30-second **connect timeout** rather than a global request timeout, so that long-lived SSE streaming responses are not prematurely aborted.
 
-`new_direct(config)` (used internally by pool workers) is also fallible. The `reqwest::Client` is built **before** the worker pool spawns, and each worker's client is built up front inside `LlmWorkerPool::new`; the first build failure propagates as `LlmError::ClientBuild` so the pool can never start in a zero-live-worker state.
+### `async fn new_with_retry_config(config: LlmConfig, retry_config: RetryConfig) -> Result<Self, LlmError>`
+
+Constructs a client with the same runtime requirements and connection timeout as `new`, but overrides the retry schedule for direct calls and for every worker in the client's pool. `RetryConfig` contains `max_attempts` (the total attempt count, including the initial attempt), `base_backoff`, and `max_backoff`; the constructor rejects `max_attempts` of zero because the total cannot be less than the initial attempt. `RetryConfig::default()` preserves the production schedule of four attempts, a 200 ms base, and a 10-second ceiling.
+
+`new_direct(config, retry_config)` (used internally by pool workers) is also fallible. The `reqwest::Client` is built **before** the worker pool spawns, and each worker's client is built up front inside `LlmWorkerPool::new`; the first build failure propagates as `LlmError::ClientBuild` so the pool can never start in a zero-live-worker state.
 
 ### `chat(messages) -> Result<(String, Usage), LlmError>`
 
@@ -93,7 +97,7 @@ Sends a streaming request and returns a pinned stream of text chunks.
 Manual exponential backoff (no extra middleware crates):
 - **Max retries:** 3 (4 total attempts)
 - **Base delay:** 200 ms
-- **Growth:** `200 * 2^attempt` ms
+- **Growth:** `200 * 2^attempt` ms (the historical schedule doubles before the first retry)
 - **Cap:** 10 s
 - **Transient conditions:** timeouts, connection errors, HTTP 429 / 502 / 503 / 504
 
@@ -129,7 +133,7 @@ Unit tests cover:
 - Message constructors
 - SSE chunk parsing
 - Backoff calculation (exponential growth + cap)
-- Retry exhaustion on persistent failure
+- Retry exhaustion with the default and injected schedules
 
 ## Future Extensions
 

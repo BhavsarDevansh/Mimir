@@ -9,10 +9,12 @@
 
 use std::fmt;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::config::LlmConfig;
 use crate::llm::pool::LlmWorkerPool;
 use crate::llm::types::LlmRequestOverrides;
+use transport::{BASE_BACKOFF_MS, MAX_BACKOFF_MS, MAX_RETRIES};
 
 mod backend;
 mod chat;
@@ -35,8 +37,42 @@ mod transport;
 pub struct LlmClient {
     client: reqwest::Client,
     config: LlmConfig,
+    retry_config: RetryConfig,
     pool: Option<Arc<LlmWorkerPool>>,
     overrides: LlmRequestOverrides,
+}
+
+/// Retry schedule for transient LLM failures.
+///
+/// `max_attempts` includes the initial attempt. The default preserves the
+/// historical three-retry schedule and 10-second backoff ceiling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RetryConfig {
+    /// Total attempts, including the initial call. Must be greater than zero.
+    pub max_attempts: u8,
+    /// Delay before the first retry, before exponential growth.
+    pub base_backoff: Duration,
+    /// Upper bound applied to every calculated retry delay.
+    pub max_backoff: Duration,
+}
+
+impl Default for RetryConfig {
+    fn default() -> Self {
+        Self {
+            max_attempts: u8::try_from(MAX_RETRIES + 1).expect("default retry count fits u8"),
+            base_backoff: Duration::from_millis(BASE_BACKOFF_MS),
+            max_backoff: Duration::from_millis(MAX_BACKOFF_MS),
+        }
+    }
+}
+
+impl RetryConfig {
+    fn validated(self) -> Result<Self, String> {
+        if self.max_attempts == 0 {
+            return Err("RetryConfig.max_attempts must be > 0".to_string());
+        }
+        Ok(self)
+    }
 }
 
 impl fmt::Debug for LlmClient {
@@ -46,6 +82,7 @@ impl fmt::Debug for LlmClient {
             .field("model", &self.config.model)
             .field("max_tokens", &self.config.max_tokens)
             .field("temperature", &self.config.temperature)
+            .field("retry_config", &self.retry_config)
             .field("api_key", &"***REDACTED***")
             .field("has_pool", &self.pool.is_some())
             .field("overrides", &self.overrides)
@@ -58,6 +95,7 @@ impl Clone for LlmClient {
         Self {
             client: self.client.clone(),
             config: self.config.clone(),
+            retry_config: self.retry_config,
             pool: self.pool.clone(),
             overrides: self.overrides.clone(),
         }

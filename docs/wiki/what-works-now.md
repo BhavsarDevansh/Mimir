@@ -258,7 +258,7 @@ All client commands talk to the daemon over HTTP except `mimir personality list`
 
 | Feature | Status | Notes & pending work |
 |---------|--------|----------------------|
-| LLM client | ✅ Works | OpenAI-compatible chat + streaming, retry/backoff on 429/502/503/504, typed error mapping. |
+| LLM client | ✅ Works | OpenAI-compatible chat + streaming, injectable retry/backoff on 429/502/503/504, typed error mapping. |
 | Worker pool | ✅ Works | Priority queues (user > system) with bounded capacity; connector LLM calls run at system priority. |
 
 ### Librarian & Retrieval Agents

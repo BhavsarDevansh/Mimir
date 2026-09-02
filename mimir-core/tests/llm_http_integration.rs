@@ -2,6 +2,7 @@ use futures::StreamExt;
 use mimir_core::{
     config::LlmConfig,
     llm::LlmClient,
+    llm::client::RetryConfig,
     llm::types::{LlmError, Message, StreamItem},
 };
 use wiremock::{
@@ -18,9 +19,16 @@ async fn test_client(base_url: String) -> LlmClient {
         max_tokens: Some(10),
         temperature: 0.0,
     };
-    LlmClient::new(config)
-        .await
-        .expect("LLM client must build in tests")
+    LlmClient::new_with_retry_config(
+        config,
+        RetryConfig {
+            max_attempts: 2,
+            base_backoff: std::time::Duration::ZERO,
+            max_backoff: std::time::Duration::ZERO,
+        },
+    )
+    .await
+    .expect("LLM client must build in tests")
 }
 
 #[tokio::test]

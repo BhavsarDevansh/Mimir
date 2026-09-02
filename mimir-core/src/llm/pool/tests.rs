@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::config::LlmConfig;
+use crate::llm::client::RetryConfig;
 use crate::llm::types::{LlmError, LlmRequestOverrides, Message, StreamItem};
 use futures::StreamExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -56,7 +57,7 @@ fn tiny_pool_config() -> WorkerPoolConfig {
 
 #[tokio::test]
 async fn test_pool_enqueues_chat_job() {
-    let pool = LlmWorkerPool::new(test_config(), tiny_pool_config())
+    let pool = LlmWorkerPool::new(test_config(), tiny_pool_config(), RetryConfig::default())
         .await
         .unwrap();
 
@@ -103,7 +104,7 @@ async fn test_pool_user_priority_over_system() {
         temperature: 0.0,
     };
 
-    let pool = LlmWorkerPool::new(config, tiny_pool_config())
+    let pool = LlmWorkerPool::new(config, tiny_pool_config(), RetryConfig::default())
         .await
         .unwrap();
 
@@ -131,7 +132,9 @@ async fn test_pool_queue_full_returns_error() {
     config.user_queue_size = 0;
     config.system_queue_size = 0;
 
-    let pool = LlmWorkerPool::new(test_config(), config).await.unwrap();
+    let pool = LlmWorkerPool::new(test_config(), config, RetryConfig::default())
+        .await
+        .unwrap();
 
     let result = pool
         .enqueue_chat(vec![Message::user("overflow")], None)
@@ -170,7 +173,7 @@ async fn test_pool_stream_yields_text_and_usage() {
         temperature: 0.0,
     };
 
-    let pool = LlmWorkerPool::new(config, tiny_pool_config())
+    let pool = LlmWorkerPool::new(config, tiny_pool_config(), RetryConfig::default())
         .await
         .unwrap();
 
@@ -222,7 +225,7 @@ async fn test_pool_job_applies_request_overrides() {
         temperature: 0.2,
     };
 
-    let pool = LlmWorkerPool::new(config, tiny_pool_config())
+    let pool = LlmWorkerPool::new(config, tiny_pool_config(), RetryConfig::default())
         .await
         .unwrap();
 
@@ -239,7 +242,7 @@ async fn test_pool_job_applies_request_overrides() {
 
 #[tokio::test]
 async fn test_worker_pool_shutdown() {
-    let pool = LlmWorkerPool::new(test_config(), tiny_pool_config())
+    let pool = LlmWorkerPool::new(test_config(), tiny_pool_config(), RetryConfig::default())
         .await
         .unwrap();
 
@@ -262,7 +265,7 @@ async fn test_pool_spawns_exactly_configured_workers() {
         user_queue_size: 4,
         system_queue_size: 4,
     };
-    let pool = LlmWorkerPool::new(test_config(), config)
+    let pool = LlmWorkerPool::new(test_config(), config, RetryConfig::default())
         .await
         .expect("pool must build with a valid config");
 
@@ -305,7 +308,7 @@ async fn test_in_flight_counter_tracks_active_jobs() {
         temperature: 0.0,
     };
 
-    let pool = LlmWorkerPool::new(config, tiny_pool_config())
+    let pool = LlmWorkerPool::new(config, tiny_pool_config(), RetryConfig::default())
         .await
         .unwrap();
 

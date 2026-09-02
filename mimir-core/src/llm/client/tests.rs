@@ -1,11 +1,12 @@
 //! Unit tests for the LLM HTTP client.
 
-use super::transport::{MAX_BACKOFF_MS, MAX_RETRIES};
+use super::transport::MAX_BACKOFF_MS;
 use super::*;
 use crate::llm::backend::LlmBackend;
 use crate::llm::types::{LlmError, Message, StreamChunk};
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// Read a complete HTTP request (headers + `Content-Length` body) from a mock
@@ -45,7 +46,8 @@ fn test_debug_does_not_leak_api_key() {
         max_tokens: Some(100),
         temperature: 0.2,
     };
-    let client = LlmClient::new_direct(config).expect("LLM direct client must build in tests");
+    let client = LlmClient::new_direct(config, RetryConfig::default())
+        .expect("LLM direct client must build in tests");
     let debug = format!("{:?}", client);
     assert!(
         !debug.contains("sk-super-secret"),
@@ -64,7 +66,8 @@ fn with_temperature_override_updates_temperature() {
         max_tokens: Some(10),
         temperature: 0.2,
     };
-    let client = LlmClient::new_direct(config).expect("LLM direct client must build in tests");
+    let client = LlmClient::new_direct(config, RetryConfig::default())
+        .expect("LLM direct client must build in tests");
     let overridden = client
         .with_temperature_override(0.7)
         .expect("temperature override supported");
@@ -90,6 +93,7 @@ async fn new_returns_client_build_error_for_invalid_pool_config() {
             worker_threads: 0,
             ..Default::default()
         },
+        RetryConfig::default(),
     )
     .await;
     assert!(
@@ -108,7 +112,8 @@ fn with_max_tokens_override_updates_max_tokens() {
         max_tokens: Some(10),
         temperature: 0.2,
     };
-    let client = LlmClient::new_direct(config).expect("LLM direct client must build in tests");
+    let client = LlmClient::new_direct(config, RetryConfig::default())
+        .expect("LLM direct client must build in tests");
     let overridden = client
         .with_max_tokens_override(256)
         .expect("max_tokens override supported");
@@ -205,23 +210,100 @@ async fn pooled_temperature_override_reaches_upstream_request() {
 
 #[test]
 fn test_calculate_backoff_grows_exponentially() {
-    let b1 = LlmClient::calculate_backoff(1);
-    let b2 = LlmClient::calculate_backoff(2);
-    let b3 = LlmClient::calculate_backoff(3);
+    let client = LlmClient::new_direct(
+        LlmConfig {
+            endpoint: "https://api.openai.com/v1".to_string(),
+            api_key: "test".to_string(),
+            model: "gpt-4o".to_string(),
+            max_tokens: Some(10),
+            temperature: 0.0,
+        },
+        RetryConfig::default(),
+    )
+    .unwrap();
+    let b1 = client.calculate_backoff(1);
+    let b2 = client.calculate_backoff(2);
+    let b3 = client.calculate_backoff(3);
 
-    // Base is 200ms; attempt 1 = ~200ms, attempt 2 = ~400ms, attempt 3 = ~800ms
-    assert!(b1 >= 200, "backoff 1 should be at least 200ms");
-    assert!(b2 >= 400, "backoff 2 should be at least 400ms");
-    assert!(b3 >= 800, "backoff 3 should be at least 800ms");
+    assert_eq!(b1, Duration::from_millis(BASE_BACKOFF_MS));
+    assert_eq!(b2, Duration::from_millis(BASE_BACKOFF_MS * 2));
+    assert_eq!(b3, Duration::from_millis(BASE_BACKOFF_MS * 4));
 }
 
 #[test]
 fn test_calculate_backoff_capped() {
-    let b10 = LlmClient::calculate_backoff(10);
+    let client = LlmClient::new_direct(
+        LlmConfig {
+            endpoint: "https://api.openai.com/v1".to_string(),
+            api_key: "test".to_string(),
+            model: "gpt-4o".to_string(),
+            max_tokens: Some(10),
+            temperature: 0.0,
+        },
+        RetryConfig::default(),
+    )
+    .unwrap();
+    let b10 = client.calculate_backoff(10);
+    assert_eq!(b10, Duration::from_millis(MAX_BACKOFF_MS));
+}
+
+#[tokio::test]
+async fn test_rejects_zero_max_attempts() {
+    let config = LlmConfig {
+        endpoint: "https://api.openai.com/v1".to_string(),
+        api_key: "test".to_string(),
+        model: "gpt-4o".to_string(),
+        max_tokens: Some(10),
+        temperature: 0.0,
+    };
+    let retry_config = RetryConfig {
+        max_attempts: 0,
+        base_backoff: Duration::ZERO,
+        max_backoff: Duration::ZERO,
+    };
+
+    let result = LlmClient::new_with_retry_config(config.clone(), retry_config).await;
     assert!(
-        b10 <= MAX_BACKOFF_MS,
-        "backoff should be capped at {} ms",
-        MAX_BACKOFF_MS
+        matches!(result, Err(LlmError::ClientBuild(ref message)) if message.contains("max_attempts")),
+        "pooled construction must reject zero total attempts, got {result:?}"
+    );
+
+    let result = LlmClient::new_direct(config, retry_config);
+    assert!(
+        matches!(result, Err(LlmError::ClientBuild(ref message)) if message.contains("max_attempts")),
+        "direct construction must reject zero total attempts, got {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_retry_with_backoff_returns_non_retryable_error_immediately() {
+    let config = LlmConfig {
+        endpoint: "https://api.openai.com/v1".to_string(),
+        api_key: "test".to_string(),
+        model: "gpt-4o".to_string(),
+        max_tokens: Some(10),
+        temperature: 0.0,
+    };
+    let client = LlmClient::new_direct(
+        config,
+        RetryConfig {
+            max_attempts: 1,
+            base_backoff: Duration::ZERO,
+            max_backoff: Duration::ZERO,
+        },
+    )
+    .unwrap();
+
+    let result = client
+        .retry_with_backoff(|| async {
+            let parse_error = serde_json::from_str::<serde_json::Value>("bad response")
+                .expect_err("malformed JSON must fail parsing");
+            Err::<(), _>(LlmError::Parse(parse_error))
+        })
+        .await;
+    assert!(
+        matches!(result, Err(LlmError::Parse(_))),
+        "a non-retryable failure must not become RetryExhausted, got {result:?}"
     );
 }
 
@@ -234,7 +316,7 @@ async fn test_retry_exhausted_on_persistent_failure() {
     let addr = listener.local_addr().unwrap();
 
     tokio::spawn(async move {
-        for _ in 0..=MAX_RETRIES {
+        for _ in 0..2 {
             let (mut stream, _) = listener.accept().await.unwrap();
             let _request = read_complete_request(&mut stream).await;
             let body = r#"{"error":"model temporarily overloaded"}"#;
@@ -254,9 +336,16 @@ async fn test_retry_exhausted_on_persistent_failure() {
         max_tokens: Some(10),
         temperature: 0.0,
     };
-    let client = LlmClient::new(config)
-        .await
-        .expect("LLM client must build in tests");
+    let client = LlmClient::new_with_retry_config(
+        config,
+        RetryConfig {
+            max_attempts: 2,
+            base_backoff: Duration::ZERO,
+            max_backoff: Duration::ZERO,
+        },
+    )
+    .await
+    .expect("LLM client must build in tests");
 
     let result = client.chat(vec![Message::user("hi")], None).await;
 
@@ -265,7 +354,7 @@ async fn test_retry_exhausted_on_persistent_failure() {
             attempts,
             last_error,
         }) => {
-            assert_eq!(attempts, MAX_RETRIES + 1);
+            assert_eq!(attempts, 2);
             assert!(
                 matches!(
                     *last_error,
@@ -274,10 +363,9 @@ async fn test_retry_exhausted_on_persistent_failure() {
                 "the original provider failure must be preserved for the caller, got: {last_error}"
             );
         }
-        other => panic!(
-            "persistent 503s must surface RetryExhausted after {} attempts, got: {other:?}",
-            MAX_RETRIES + 1
-        ),
+        other => {
+            panic!("persistent 503s must surface RetryExhausted after 2 attempts, got: {other:?}",)
+        }
     }
 }
 

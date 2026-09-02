@@ -9,7 +9,7 @@ use tokio::sync::{Mutex, Notify, watch};
 use tracing::debug;
 
 use crate::config::LlmConfig;
-use crate::llm::client::LlmClient;
+use crate::llm::client::{LlmClient, RetryConfig};
 use crate::llm::pool::{InFlightGuard, LlmWorkerPool, PoolInner, WorkerPoolConfig};
 use crate::llm::types::Job;
 
@@ -22,7 +22,11 @@ impl LlmWorkerPool {
     ///
     /// Must be called from within a Tokio runtime context because it spawns
     /// the background worker tasks via [`tokio::spawn`].
-    pub async fn new(llm_config: LlmConfig, config: WorkerPoolConfig) -> Result<Self, String> {
+    pub async fn new(
+        llm_config: LlmConfig,
+        config: WorkerPoolConfig,
+        retry_config: RetryConfig,
+    ) -> Result<Self, String> {
         if config.worker_threads == 0 {
             return Err("WorkerPoolConfig.worker_threads must be > 0".to_string());
         }
@@ -46,7 +50,7 @@ impl LlmWorkerPool {
         let mut clients = Vec::with_capacity(config.worker_threads as usize);
         for i in 0..config.worker_threads {
             clients.push(
-                LlmClient::new_direct(llm_config.clone())
+                LlmClient::new_direct(llm_config.clone(), retry_config)
                     .map_err(|e| format!("LLM worker {i} failed to build HTTP client: {e}"))?,
             );
         }

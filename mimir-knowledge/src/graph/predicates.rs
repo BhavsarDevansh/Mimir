@@ -129,8 +129,7 @@ pub const CONNECTOR_EMITTED_PREDICATES: &[&str] = &[
 /// Single source of truth shared by the extraction list splitter
 /// (`split_list_objects` in `extract/parse.rs`) and the insert overlap logic
 /// (`insert_fact_in_tx` in `queries/fact/insert.rs`), so the two can never
-/// drift apart. The open `favourite_<thing>` family is multi-valued through
-/// Every entry is a
+/// drift apart. Every entry is a
 /// canonical predicate (pinned by `multi_valued_predicates_are_canonical` in
 /// `mimir-knowledge/tests/predicate_allowlist_test.rs`).
 pub const MULTI_VALUED_PREDICATES: &[&str] = &[
@@ -145,10 +144,9 @@ pub const MULTI_VALUED_PREDICATES: &[&str] = &[
     "has_partner",
 ];
 
-/// Whether a predicate name is part of the canonical vocabulary the strict
-/// extraction schema exposes after alias normalisation. Aliases live in the
-/// database and resolve through the taxonomy; this static check is used only
-/// for deterministic connector tests.
+/// Whether a predicate name is part of the canonical seed pinned by tests.
+/// Runtime extraction resolves through the DB-backed taxonomy; aliases are the
+/// database source of truth and may map legacy names onto a controlled leaf.
 ///
 /// Deterministic connector tests use this list to pin their registration
 /// surface. LLM extraction validates against the DB-backed schema and Rust
@@ -360,6 +358,21 @@ impl KnowledgeGraph {
             Some((true,)) => Ok(Some(id)),
             _ => Ok(None),
         }
+    }
+
+    /// Resolve an emit-eligible leaf or return the shared strict-ingestion
+    /// validation error.
+    pub(crate) async fn require_emit_eligible_relationship_type(
+        &self,
+        name: &str,
+    ) -> Result<i16, KnowledgeError> {
+        self.resolve_emit_eligible_relationship_type(name)
+            .await?
+            .ok_or_else(|| {
+                KnowledgeError::Validation(format!(
+                    "predicate '{name}' is not an emit-eligible taxonomy leaf"
+                ))
+            })
     }
 
     /// Reverse lookup: get the relationship_type name for a given id.

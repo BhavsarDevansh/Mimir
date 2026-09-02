@@ -151,11 +151,12 @@ async fn facts_without_categories_receive_the_taxonomy_rule_category() {
 async fn unrecognized_facts_are_staged_and_resolvable() {
     let tg = TestGraph::new().await;
     let payload = serde_json::json!({"subject": "Alice", "object": "Bank"}).to_string();
-    let id = tg
+    let staged = tg
         .kg
         .stage_unrecognized_fact(None, Some("17:8"), "owes", &payload, None)
         .await
         .unwrap();
+    let id = staged.id;
 
     let staged = tg
         .kg
@@ -189,7 +190,8 @@ async fn staged_fact_resolution_is_governed() {
         .kg
         .stage_unrecognized_fact(None, Some("17:8"), "owes", "{}", None)
         .await
-        .unwrap();
+        .unwrap()
+        .id;
     let preference_root = tg
         .kg
         .get_relationship_type_id("preference")
@@ -235,6 +237,35 @@ async fn distinct_unknown_facts_with_the_same_source_predicate_are_all_staged() 
         .await
         .unwrap();
     assert_eq!(staged.len(), 2, "each distinct payload must survive");
+}
+
+#[tokio::test]
+async fn duplicate_chat_facts_with_null_source_fields_are_staged_once() {
+    let tg = TestGraph::new().await;
+    let payload = serde_json::json!({"object": "Acme Bank"}).to_string();
+
+    let first = tg
+        .kg
+        .stage_unrecognized_fact(None, None, "owes", &payload, None)
+        .await
+        .unwrap();
+    let second = tg
+        .kg
+        .stage_unrecognized_fact(None, None, "owes", &payload, None)
+        .await
+        .unwrap();
+
+    assert!(first.newly_staged);
+    assert!(!second.newly_staged);
+    assert_eq!(first.id, second.id);
+    assert_eq!(
+        tg.kg
+            .list_unrecognized_facts(Some("unmapped"))
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[tokio::test]

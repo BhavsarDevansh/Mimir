@@ -15,6 +15,29 @@ use crate::models::fact::NewFact;
 use crate::models::source::{ExtractionMethod, SourceType};
 
 impl KnowledgeGraph {
+    /// Resolve and canonicalise a new fact against the closed taxonomy before
+    /// insertion. This is shared by single and batch writes so category
+    /// fallback and leaf-name normalisation cannot drift.
+    async fn resolve_and_prepare_new_fact(
+        &self,
+        fact: &mut models::fact::NewFact,
+    ) -> Result<i16, KnowledgeError> {
+        let relationship_type_id = self
+            .require_emit_eligible_relationship_type(&fact.relationship_type)
+            .await?;
+        if let Some(name) = self.relationship_type_name(relationship_type_id).await {
+            fact.relationship_type = name;
+        }
+        if fact.category_ids.is_empty()
+            && let Some(category_id) = self
+                .default_category_id_for_relationship_type(relationship_type_id)
+                .await?
+        {
+            fact.category_ids.push(category_id);
+        }
+        Ok(relationship_type_id)
+    }
+
     // ------------------------------------------------------------------
     // Fact CRUD delegates
     // ------------------------------------------------------------------
@@ -45,25 +68,7 @@ impl KnowledgeGraph {
 
         let mut relationship_type_ids = Vec::with_capacity(facts.len());
         for fact in &mut facts {
-            let relationship_type_id = self
-                .resolve_emit_eligible_relationship_type(&fact.relationship_type)
-                .await?
-                .ok_or_else(|| {
-                    KnowledgeError::Validation(format!(
-                        "predicate '{}' is not an emit-eligible taxonomy leaf",
-                        fact.relationship_type
-                    ))
-                })?;
-            if let Some(name) = self.relationship_type_name(relationship_type_id).await {
-                fact.relationship_type = name;
-            }
-            if fact.category_ids.is_empty()
-                && let Some(category_id) = self
-                    .default_category_id_for_relationship_type(relationship_type_id)
-                    .await?
-            {
-                fact.category_ids.push(category_id);
-            }
+            let relationship_type_id = self.resolve_and_prepare_new_fact(fact).await?;
             relationship_type_ids.push(relationship_type_id);
         }
 
@@ -197,20 +202,8 @@ impl KnowledgeGraph {
         ctx: &'a mut CascadeContext,
     ) -> Pin<Box<dyn Future<Output = Result<models::fact::Fact, KnowledgeError>> + Send + 'a>> {
         Box::pin(async move {
-            // Resolve predicate name to id.
-            let relationship_type_id = self
-                .resolve_emit_eligible_relationship_type(&new_fact.relationship_type)
-                .await?
-                .ok_or_else(|| {
-                    KnowledgeError::Validation(format!(
-                        "predicate '{}' is not an emit-eligible taxonomy leaf",
-                        new_fact.relationship_type
-                    ))
-                })?;
-
-            if let Some(name) = self.relationship_type_name(relationship_type_id).await {
-                new_fact.relationship_type = name;
-            }
+            // Resolve and canonicalise the predicate, and apply category fallback.
+            let relationship_type_id = self.resolve_and_prepare_new_fact(&mut new_fact).await?;
 
             // Cycle detection: skip duplicate triples in the same cascade.
             if ctx.contains(
@@ -274,14 +267,6 @@ impl KnowledgeGraph {
             if new_fact.inferred {
                 new_fact.source_type = SourceType::Inference;
                 new_fact.extraction_method = Some(ExtractionMethod::InferenceRule);
-            }
-
-            if new_fact.category_ids.is_empty()
-                && let Some(category_id) = self
-                    .default_category_id_for_relationship_type(relationship_type_id)
-                    .await?
-            {
-                new_fact.category_ids.push(category_id);
             }
 
             let mut tx = self.pool.begin().await?;

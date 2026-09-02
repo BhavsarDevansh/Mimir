@@ -36,7 +36,14 @@ CREATE TABLE unrecognized_facts (
 CREATE INDEX idx_relationship_types_parent ON relationship_types(parent_id);
 CREATE INDEX idx_relationship_types_emit ON relationship_types(emit_eligible);
 CREATE INDEX idx_unrecognized_facts_status ON unrecognized_facts(status);
-CREATE UNIQUE INDEX idx_unrecognized_facts_source ON unrecognized_facts(connector_instance_id, raw_reference, relationship_type_raw, payload_json);
+-- COALESCE keeps chat-sourced rows (both source fields NULL) deduplicated as
+-- well; a plain unique index treats NULLs as distinct in SQLite.
+CREATE UNIQUE INDEX idx_unrecognized_facts_source ON unrecognized_facts(
+    COALESCE(connector_instance_id, -1),
+    COALESCE(raw_reference, ''),
+    relationship_type_raw,
+    payload_json
+);
 
 -- 1. Seed the compact upper ontology. Roots are query-only; leaves keep the
 -- existing canonical vocabulary and gain a deterministic category fallback.

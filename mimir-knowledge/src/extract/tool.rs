@@ -76,7 +76,7 @@ static REMEMBER_TOOL_SCHEMA_TEMPLATE: LazyLock<serde_json::Value> = LazyLock::ne
                                 "categories": {
                                     "type": "array",
                                     "items": { "type": "string" },
-                                    "description": "Dewey Decimal category IDs (e.g., ['200', '210']) that best describe the topic of this fact. Use the Categorisation Guide in the system prompt."
+                                    "description": "Dewey Decimal category IDs (e.g., ['200', '210']) that best describe the topic of this fact. Use the Categorisation Guide in the system prompt; Rust validates IDs and supplies a taxonomy fallback when none are valid."
                                 },
                                 "recurrence": {
                                     "type": "string",

@@ -116,15 +116,11 @@ async fn extracted_to_normalized(
     let mut errors = Vec::new();
 
     for mut fact in facts {
-        // Canonicalise the predicate once: `resolve_canonical_relationship_type`
-        // enforces the Rust-side allow-list (issue #401) — seeded predicates
-        // and their aliases resolve to the canonical id, the prompt-instructed
-        // `favourite_*` family is accepted, and any other predicate is rejected
-        // with a clear error instead of auto-creating a `relationship_types`
-        // row. The canonical name drives list-splitting below.
-        // `normalize_and_insert` re-resolves the id (idempotently) through the
-        // permissive shared boundary, so the strict check above is not
-        // repeated downstream.
+        // Canonicalise the predicate once: the DB-backed resolver accepts only
+        // an emit-eligible leaf (or controlled alias). Unrecognized predicates
+        // are staged instead of auto-creating a row. The canonical name drives
+        // list-splitting below, and `normalize_and_insert` re-resolves the id
+        // idempotently at the shared ingestion boundary.
         let relationship_type_id = match kg
             .resolve_canonical_relationship_type(&fact.relationship_type)
             .await

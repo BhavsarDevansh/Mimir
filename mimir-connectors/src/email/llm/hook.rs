@@ -139,7 +139,7 @@ impl HookHandler for EmailExtractionHook {
                 );
                 let mut staged_count = 0i64;
                 for staged_fact in &outcome.staged {
-                    if let Err(error) = payload
+                    let staged = match payload
                         .kg
                         .stage_unrecognized_fact(
                             Some(payload.instance_id),
@@ -150,17 +150,22 @@ impl HookHandler for EmailExtractionHook {
                         )
                         .await
                     {
-                        warn!(
-                            raw_ref = %payload.raw_ref,
-                            "staging unrecognized email fact failed: {error}"
-                        );
-                        return terminal_or_retry(
-                            payload,
-                            ctx,
-                            format!("failed to stage unrecognized fact: {error}"),
-                        );
+                        Ok(staged) => staged,
+                        Err(error) => {
+                            warn!(
+                                raw_ref = %payload.raw_ref,
+                                "staging unrecognized email fact failed: {error}"
+                            );
+                            return terminal_or_retry(
+                                payload,
+                                ctx,
+                                format!("failed to stage unrecognized fact: {error}"),
+                            );
+                        }
+                    };
+                    if staged.newly_staged {
+                        staged_count += 1;
                     }
-                    staged_count += 1;
                 }
 
                 match normalize_and_insert(&payload.kg, outcome.facts, provenance).await {

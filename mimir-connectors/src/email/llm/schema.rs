@@ -123,7 +123,7 @@ static EMAIL_EXTRACTION_TOOL_TEMPLATE: LazyLock<serde_json::Value> = LazyLock::n
                                 "category_ids": {
                                     "type": "array",
                                     "items": { "type": "integer" },
-                                    "description": "Dewey Decimal category IDs from the Categorisation Guide that best describe this fact. Rust validates IDs and always guarantees at least one category."
+                                    "description": "Dewey Decimal category IDs from the Categorisation Guide that best describe this fact. Rust validates IDs and supplies a taxonomy fallback when none are valid."
                                 },
                                 "location": {
                                     "type": "object",
@@ -161,12 +161,9 @@ pub(super) fn email_extraction_tool_schema(predicate_names: &[String]) -> serde_
     schema
 }
 
-/// The canonical relationship-type vocabulary the model must stay within
-/// (issue #508), rendered from the same
-/// [`mimir_knowledge::CANONICAL_PREDICATES`] const the Rust validator
-/// checks, so the prompt and the validator cannot drift apart. The open
-/// `favourite_<thing>` family is accepted too, mirroring
-/// [`mimir_knowledge::is_canonical_predicate_name`].
+/// The controlled relationship-type vocabulary the model must stay within,
+/// rendered from the DB-derived emit-eligible leaf list also used by the Rust
+/// validator, so the prompt and the validator cannot drift apart.
 pub(super) fn build_system_prompt(
     user_identity: Option<&str>,
     predicate_names: &[String],

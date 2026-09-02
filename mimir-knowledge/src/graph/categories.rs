@@ -118,7 +118,9 @@ impl KnowledgeGraph {
         relationship_type_id: i16,
     ) -> Result<Option<i32>, KnowledgeError> {
         let row: Option<(i32,)> = sqlx::query_as(
-            "SELECT category_id FROM relationship_type_category_rules              WHERE relationship_type_id = ? AND subject_entity_type_id = 0              AND object_entity_type_id = 0 AND event_type_id = 0",
+            "SELECT category_id FROM relationship_type_category_rules \
+             WHERE relationship_type_id = ? AND subject_entity_type_id = 0 \
+             AND object_entity_type_id = 0 AND event_type_id = 0",
         )
         .bind(relationship_type_id)
         .fetch_optional(&self.pool)

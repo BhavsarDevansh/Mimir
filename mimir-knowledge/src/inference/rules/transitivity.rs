@@ -36,14 +36,8 @@ impl InferenceRule for TransitivityRule {
         }
 
         let located_in_id = kg
-            .resolve_emit_eligible_relationship_type(RELATIONSHIP_TYPE_LOCATED_IN)
-            .await?
-            .ok_or_else(|| {
-                crate::KnowledgeError::Validation(format!(
-                    "inferred predicate '{}' is not an emit-eligible taxonomy leaf",
-                    RELATIONSHIP_TYPE_LOCATED_IN
-                ))
-            })?;
+            .require_emit_eligible_relationship_type(RELATIONSHIP_TYPE_LOCATED_IN)
+            .await?;
 
         let mut results = Vec::new();
 
@@ -119,14 +113,8 @@ impl InferenceRule for TransitivityRule {
             // A-visited-C. We do NOT do backward lookup for located_in-to-
             // located_in to avoid self-disputing chains.
             let visited_id = kg
-                .resolve_emit_eligible_relationship_type(RELATIONSHIP_TYPE_VISITED)
-                .await?
-                .ok_or_else(|| {
-                    crate::KnowledgeError::Validation(format!(
-                        "inferred predicate '{}' is not an emit-eligible taxonomy leaf",
-                        RELATIONSHIP_TYPE_VISITED
-                    ))
-                })?;
+                .require_emit_eligible_relationship_type(RELATIONSHIP_TYPE_VISITED)
+                .await?;
 
             let trigger_facts: Vec<Fact> = sqlx::query_as::<_, Fact>(
                 "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \

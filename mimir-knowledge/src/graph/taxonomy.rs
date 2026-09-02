@@ -22,6 +22,14 @@ pub struct UnrecognizedFact {
     pub updated_at: DateTime<Utc>,
 }
 
+/// The result of staging a producer payload. `newly_staged` lets callers
+/// preserve idempotent review-queue counts when a work item is retried.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnrecognizedFactStage {
+    pub id: i64,
+    pub newly_staged: bool,
+}
+
 impl KnowledgeGraph {
     /// List canonical leaf names eligible for LLM fact emission.
     ///
@@ -49,10 +57,13 @@ impl KnowledgeGraph {
         relationship_type_raw: &str,
         payload_json: &str,
         proposed_relationship_type_id: Option<i16>,
-    ) -> Result<i64, KnowledgeError> {
+    ) -> Result<UnrecognizedFactStage, KnowledgeError> {
         let now = self.now();
-        let id: i64 = sqlx::query_scalar(
-            "INSERT INTO unrecognized_facts (connector_instance_id, raw_reference, relationship_type_raw, payload_json, proposed_relationship_type_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (connector_instance_id, raw_reference, relationship_type_raw, payload_json) DO UPDATE SET updated_at = excluded.updated_at RETURNING id",
+        let mut tx = self.pool.begin().await?;
+        let inserted = sqlx::query(
+            "INSERT OR IGNORE INTO unrecognized_facts \
+             (connector_instance_id, raw_reference, relationship_type_raw, payload_json, proposed_relationship_type_id, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(connector_instance_id)
         .bind(raw_reference)
@@ -61,9 +72,30 @@ impl KnowledgeGraph {
         .bind(proposed_relationship_type_id)
         .bind(now)
         .bind(now)
-            .fetch_one(&self.pool)
+        .execute(&mut *tx)
         .await?;
-        Ok(id)
+
+        let id = if inserted.rows_affected() == 1 {
+            inserted.last_insert_rowid()
+        } else {
+            sqlx::query_scalar(
+                "SELECT id FROM unrecognized_facts \
+                 WHERE COALESCE(connector_instance_id, -1) = COALESCE(?, -1) \
+                 AND COALESCE(raw_reference, '') = COALESCE(?, '') \
+                 AND relationship_type_raw = ? AND payload_json = ?",
+            )
+            .bind(connector_instance_id)
+            .bind(raw_reference)
+            .bind(relationship_type_raw)
+            .bind(payload_json)
+            .fetch_one(&mut *tx)
+            .await?
+        };
+        tx.commit().await?;
+        Ok(UnrecognizedFactStage {
+            id,
+            newly_staged: inserted.rows_affected() == 1,
+        })
     }
 
     /// List unrecognized facts, optionally filtered by governance status.

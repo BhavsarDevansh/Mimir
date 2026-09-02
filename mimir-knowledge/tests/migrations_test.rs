@@ -379,6 +379,21 @@ async fn migration_059_uses_subject_relationship_index_for_overlap_scan() {
         "facts must have a subject/relationship composite index"
     );
 
+    let indexed_columns: Vec<(i64, String)> =
+        sqlx::query_as("SELECT seqno, name FROM pragma_index_info(?) ORDER BY seqno")
+            .bind("idx_facts_subject_relationship")
+            .fetch_all(kg.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        indexed_columns,
+        vec![
+            (0, "subject_id".to_string()),
+            (1, "relationship_type_id".to_string())
+        ],
+        "index must contain only the two equality columns"
+    );
+
     let plans: Vec<(i64, i64, i64, String)> = sqlx::query_as(
         "EXPLAIN QUERY PLAN \
          SELECT id FROM facts \

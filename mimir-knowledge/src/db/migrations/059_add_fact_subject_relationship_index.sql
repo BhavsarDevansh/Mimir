@@ -7,4 +7,4 @@
 -- self-join without adding write maintenance for columns it does not seek.
 
 CREATE INDEX IF NOT EXISTS idx_facts_subject_relationship
-    ON facts(subject_id, relationship_type_id, object_id, confidence DESC);
+    ON facts(subject_id, relationship_type_id);

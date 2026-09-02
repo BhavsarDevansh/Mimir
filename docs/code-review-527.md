@@ -3,6 +3,7 @@
 ## Scope
 
 - `Cargo.toml`
+- `docs/code-review-527.md`
 - `mimir-knowledge/src/db/migrations/059_add_fact_subject_relationship_index.sql`
 - `mimir-knowledge/tests/migrations_test.rs`
 - `docs/benchmarks.md`
@@ -26,6 +27,12 @@
 | VISION compliance | None | None |
 | Type consistency | None | None |
 | Public API surface | No public API changes; migration 059 is additive. | None |
+
+## Follow-Up Review
+
+| Dimension | Finding | Severity | Action |
+|---|---|---|---|
+| Type consistency | Migration 059 created four indexed columns while the documentation and migration rationale specified only `subject_id` and `relationship_type_id`. | Medium | Reduced the index to the two equality columns and added a regression test that asserts the indexed column order. |
 
 ## Actions Taken During Review
 

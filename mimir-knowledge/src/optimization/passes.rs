@@ -3,7 +3,7 @@
 //! Each pass mutates the knowledge graph and reports a [`PassSummary`];
 //! orchestration, run bookkeeping, and backup live in the sibling modules.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
@@ -24,16 +24,20 @@ use super::{OptimizationRunner, PassSummary};
 impl<'a> OptimizationRunner<'a> {
     pub(super) async fn deterministic_dedup(&self) -> Result<PassSummary, crate::KnowledgeError> {
         let pairs = sqlx::query(
-            "SELECT a.id AS keep_id, b.id AS duplicate_id \
+            "SELECT a.id AS keep_id, b.id AS duplicate_id, \
+                    a.confidence AS keep_confidence, b.confidence AS duplicate_confidence \
              FROM facts a \
              JOIN facts b ON b.id > a.id \
               AND b.subject_id = a.subject_id \
               AND b.relationship_type_id = a.relationship_type_id \
               AND COALESCE(b.object_id, -1) = COALESCE(a.object_id, -1) \
               AND COALESCE(b.object_literal, '') = COALESCE(a.object_literal, '') \
-              AND COALESCE(b.valid_from, '0001-01-01T00:00:00Z') <= COALESCE(a.valid_until, '9999-12-31T23:59:59Z') \
-              AND COALESCE(a.valid_from, '0001-01-01T00:00:00Z') <= COALESCE(b.valid_until, '9999-12-31T23:59:59Z') \
-             WHERE a.fact_status_id NOT IN (?, ?) AND b.fact_status_id NOT IN (?, ?)",
+              AND (a.valid_from IS NULL OR a.valid_until IS NULL OR a.valid_from < a.valid_until) \
+              AND (b.valid_from IS NULL OR b.valid_until IS NULL OR b.valid_from < b.valid_until) \
+              AND (b.valid_from IS NULL OR a.valid_until IS NULL OR b.valid_from < a.valid_until) \
+              AND (a.valid_from IS NULL OR b.valid_until IS NULL OR a.valid_from < b.valid_until) \
+             WHERE a.fact_status_id NOT IN (?, ?) AND b.fact_status_id NOT IN (?, ?) \
+             ORDER BY a.id, b.id",
         )
         .bind(FactStatus::Superseded as i16)
         .bind(FactStatus::Forgotten as i16)
@@ -42,19 +46,54 @@ impl<'a> OptimizationRunner<'a> {
         .fetch_all(self.kg.pool())
         .await?;
 
+        let now = self.kg.now();
         let mut merged = 0;
         let mut seen = HashSet::new();
-        for row in pairs {
-            let keep_id: i32 = row.try_get("keep_id")?;
-            let duplicate_id: i32 = row.try_get("duplicate_id")?;
+        let merge_candidates: Vec<(i32, i32, f32, f32)> = pairs
+            .iter()
+            .map(|row| {
+                Ok((
+                    row.try_get::<i32, _>("keep_id")?,
+                    row.try_get::<i32, _>("duplicate_id")?,
+                    row.try_get::<f32, _>("keep_confidence")?,
+                    row.try_get::<f32, _>("duplicate_confidence")?,
+                ))
+            })
+            .collect::<Result<_, crate::KnowledgeError>>()?;
+        let mut confidences: HashMap<i32, f32> = merge_candidates
+            .iter()
+            .flat_map(
+                |&(keep_id, duplicate_id, keep_confidence, duplicate_confidence)| {
+                    [
+                        (keep_id, keep_confidence),
+                        (duplicate_id, duplicate_confidence),
+                    ]
+                },
+            )
+            .collect();
+        let mut tx = self.kg.pool().begin().await?;
+        for &(keep_id, duplicate_id, _, _) in &merge_candidates {
+            if seen.contains(&keep_id) {
+                continue;
+            }
             if !seen.insert(duplicate_id) {
                 continue;
             }
-            let mut tx = self.kg.pool().begin().await?;
-            merge_fact_pair(&mut tx, self.kg.now(), keep_id, duplicate_id).await?;
-            tx.commit().await?;
+            let keep_confidence = confidences[&keep_id];
+            let duplicate_confidence = confidences[&duplicate_id];
+            let boosted = merge_fact_pair(
+                &mut tx,
+                now,
+                keep_id,
+                duplicate_id,
+                keep_confidence,
+                duplicate_confidence,
+            )
+            .await?;
+            confidences.insert(keep_id, boosted);
             merged += 1;
         }
+        tx.commit().await?;
 
         Ok(PassSummary {
             facts_merged: merged,
@@ -71,6 +110,7 @@ impl<'a> OptimizationRunner<'a> {
         let candidates = sqlx::query(
             "SELECT a.id AS fact_a_id, b.id AS fact_b_id, \
                     rta.name AS predicate_a, rtb.name AS predicate_b, \
+                    a.confidence AS confidence_a, b.confidence AS confidence_b, \
                     ea.name AS subject_name, COALESCE(ob.name, a.object_literal, '') AS object_name \
              FROM facts a \
              JOIN facts b ON b.id > a.id \
@@ -119,25 +159,38 @@ impl<'a> OptimizationRunner<'a> {
         )
         .await?;
 
-        let valid_pairs: HashSet<(i32, i32)> = candidates
-            .iter()
-            .filter_map(|row| {
-                Some((
-                    row.try_get("fact_a_id").ok()?,
-                    row.try_get("fact_b_id").ok()?,
-                ))
-            })
-            .collect();
-
+        let mut valid_pairs = HashMap::new();
+        for row in &candidates {
+            let pair = (
+                row.try_get::<i32, _>("fact_a_id")?,
+                row.try_get::<i32, _>("fact_b_id")?,
+            );
+            valid_pairs.insert(
+                pair,
+                (
+                    row.try_get::<f32, _>("confidence_a")?,
+                    row.try_get::<f32, _>("confidence_b")?,
+                ),
+            );
+        }
         let mut queued = 0;
         for candidate in response.candidates {
             let pair = ordered_pair(candidate.fact_a_id, candidate.fact_b_id);
-            if !valid_pairs.contains(&pair) {
+            if !valid_pairs.contains_key(&pair) {
                 continue;
             }
             if candidate.suggested_action == "merge" && candidate.llm_confidence >= 0.9 {
                 let mut tx = self.kg.pool().begin().await?;
-                merge_fact_pair(&mut tx, self.kg.now(), pair.0, pair.1).await?;
+                let (keep_confidence, duplicate_confidence) = valid_pairs[&pair];
+                merge_fact_pair(
+                    &mut tx,
+                    self.kg.now(),
+                    pair.0,
+                    pair.1,
+                    keep_confidence,
+                    duplicate_confidence,
+                )
+                .await?;
                 tx.commit().await?;
             } else {
                 sqlx::query(
@@ -400,15 +453,9 @@ async fn merge_fact_pair(
     now: DateTime<Utc>,
     keep_id: i32,
     duplicate_id: i32,
-) -> Result<(), crate::KnowledgeError> {
-    let keep_confidence: f32 = sqlx::query_scalar("SELECT confidence FROM facts WHERE id = ?")
-        .bind(keep_id)
-        .fetch_one(&mut **tx)
-        .await?;
-    let duplicate_confidence: f32 = sqlx::query_scalar("SELECT confidence FROM facts WHERE id = ?")
-        .bind(duplicate_id)
-        .fetch_one(&mut **tx)
-        .await?;
+    keep_confidence: f32,
+    duplicate_confidence: f32,
+) -> Result<f32, crate::KnowledgeError> {
     let boosted = (keep_confidence.max(duplicate_confidence) + 0.05).min(0.95);
 
     sqlx::query("UPDATE facts SET confidence = ?, updated_at = ? WHERE id = ?")
@@ -471,7 +518,7 @@ async fn merge_fact_pair(
     .execute(&mut **tx)
     .await?;
 
-    Ok(())
+    Ok(boosted)
 }
 
 async fn fact_already_exists(

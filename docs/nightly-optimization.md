@@ -6,7 +6,7 @@ The nightly optimization pipeline maintains graph health by running a fixed sequ
 
 ## Passes
 
-1. **Deterministic Deduplication** – merges facts with identical subject-predicate-object triples, boosting confidence and preserving sources.
+1. **Deterministic Deduplication** – merges facts with identical subject-predicate-object triples in one pass-level transaction, boosting confidence and preserving sources. Candidate pairs carry both source confidences, Rust tracks the keeper's current confidence when one keeper absorbs multiple duplicates, and empty half-open intervals follow the insert-time overlap semantics.
 2. **Semantic Deduplication** – sends near-match candidates to the LLM with a strict JSON schema. Auto-merges pairs with confidence >= 0.9; queues uncertain pairs in `dedup_queue`.
 3. **Entity Semantic Deduplication** – a capped, deterministic pre-filter (same-type entities sharing an alias or equal/contained names, excluding pairs the LLM already evaluated or a human already resolved) feeds a strict tool-schema LLM evaluation; every validated result lands in `entity_merge_queue` for human review (issue #282). Entities are never auto-merged by this pass — `mimir kb merges apply` resolves them. LLM failures (backend errors, missing or malformed tool calls) are contained inside the pass: it logs a warning and reports a zero count so the remaining passes still run; the DB pre-filter errors keep propagating as real failures.
 4. **Contradiction Resolution** – evaluates explicit vs inferred facts using `ContradictionRule`.
@@ -20,7 +20,7 @@ The nightly optimization pipeline maintains graph health by running a fixed sequ
 
 ## Transaction Model
 
-Each mutating operation runs in its **own short transaction** rather than one transaction wrapping an entire pass. For example, deduplication and semantic-dedup both `begin()` / `commit()` per fact pair (`merge_fact_pair`), so a single merge failure cannot roll back an entire pass worth of work. Confidence recalculation, by contrast, recalculates a stale root **and** cascades to its inferred descendants within a single transaction, so a root and its subtree are always consistent. Each pass records its outcome (facts merged, candidates queued, facts forgotten, or error) in `optimization_pass_runs` regardless of per-item success.
+Each mutating operation runs in the **shortest transaction** that preserves its consistency boundary rather than wrapping every statement in a separate commit. Deterministic deduplication batches all exact-merge writes into one pass-level transaction so a merge failure rolls back the pass's duplicate merges together and nightly runs avoid an fsync per pair. Semantic deduplication and confidence recalculation keep their existing per-item transaction boundaries, while confidence recalculation includes a stale root **and** its inferred descendants in one transaction so the subtree is always consistent. Each pass records its outcome (facts merged, candidates queued, facts forgotten, or error) in `optimization_pass_runs` regardless of per-item success.
 
 ## Backup
 

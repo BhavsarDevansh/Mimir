@@ -15,7 +15,7 @@ Every night Mimir performs a multi-step health check on your knowledge graph:
 
 ## What happens to my data?
 
-- Merged facts are marked **Superseded**, not deleted, so you can still trace their history.
+- Merged facts are marked **Superseded**, not deleted, so you can still trace their history. Exact merges are applied as one atomic batch, so a failure cannot leave the pass only partially merged.
 - Entity merge suggestions are never applied automatically — `mimir kb merges list` shows them and `mimir kb merges apply <id>` merges or `mimir kb merges keep <id>` marks the pair `KeptSeparate` so you can resolve a suggestion without merging.
 - Forgotten facts go to the **Trash** for 30 days before permanent removal.
 - Pending confirmations older than 7 days are automatically rejected and deleted.

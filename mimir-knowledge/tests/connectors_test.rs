@@ -3,6 +3,8 @@
 use mimir_knowledge::KnowledgeGraph;
 use mimir_knowledge::models::connector::UpsertConnectorInput;
 use mimir_knowledge::models::enums::{ConnectorAuthState, ConnectorStatus, ConnectorType};
+use mimir_knowledge::models::fact::NewFact;
+use mimir_knowledge::models::source::SourceType;
 
 async fn init_kg() -> (KnowledgeGraph, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
@@ -525,8 +527,6 @@ async fn create_connector_concurrent_same_slug_yields_one_winner() {
 
 use mimir_knowledge::models::audit_log::ChangedBy;
 use mimir_knowledge::models::entity::EntityType;
-use mimir_knowledge::models::fact::NewFact;
-use mimir_knowledge::models::source::SourceType;
 use mimir_knowledge::queries::source::AddSourceRequest;
 
 /// Insert a fact sourced from a connector instance (mimicking ingestion).
@@ -692,8 +692,85 @@ async fn record_fact_counts_rejects_negative_deltas() {
         mimir_knowledge::KnowledgeError::Validation(_)
     ));
 
+    let err = kg
+        .record_connector_fact_counts(c.id, 0, 0, -1)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        mimir_knowledge::KnowledgeError::Validation(_)
+    ));
+
     // Rejected updates leave the cumulative counters untouched.
     let after = kg.get_connector(c.id).await.unwrap().unwrap();
     assert_eq!(after.facts_accepted, 0);
     assert_eq!(after.facts_dropped, 0);
+    assert_eq!(after.facts_staged, 0);
+}
+
+#[tokio::test]
+async fn manually_created_relationship_types_are_non_emitting_by_default() {
+    let (kg, _dir) = init_kg().await;
+    sqlx::query("INSERT INTO relationship_types (name, description) VALUES (?, ?)")
+        .bind("manual")
+        .bind("Manually created before explicit promotion")
+        .execute(kg.pool())
+        .await
+        .unwrap();
+
+    let row: (bool, Option<i64>, String) = sqlx::query_as(
+        "SELECT emit_eligible, parent_id, node_kind FROM relationship_types WHERE name = 'manual'",
+    )
+    .fetch_one(kg.pool())
+    .await
+    .unwrap();
+    assert_eq!(row, (false, None, "leaf".to_string()));
+}
+
+#[tokio::test]
+async fn emit_eligible_relationship_type_requires_a_default_category() {
+    let (kg, _dir) = init_kg().await;
+    sqlx::query("INSERT INTO relationship_types (name, description) VALUES (?, ?)")
+        .bind("uncategorised")
+        .bind("Explicitly promoted without a category rule")
+        .execute(kg.pool())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE relationship_types SET emit_eligible = TRUE WHERE name = 'uncategorised'")
+        .execute(kg.pool())
+        .await
+        .unwrap();
+    let subject = kg
+        .create_entity(
+            "Devansh",
+            mimir_knowledge::models::entity::EntityType::Person,
+            &[],
+        )
+        .await
+        .unwrap()
+        .id;
+
+    let fact = NewFact {
+        subject_id: subject,
+        relationship_type: "uncategorised".to_string(),
+        object_id: None,
+        object_literal: Some("test".to_string()),
+        valid_from: None,
+        valid_until: None,
+        source_type: SourceType::UserEdit,
+        connector_instance_id: None,
+        connector_type: None,
+        raw_reference: None,
+        extraction_method: None,
+        inferred: false,
+        inference_depth: 0,
+        confidence: None,
+        parent_fact_ids: Vec::new(),
+        category_ids: Vec::new(),
+    };
+    let error = kg.insert_fact(fact).await.unwrap_err();
+    assert!(matches!(
+        error,
+        mimir_knowledge::KnowledgeError::Validation(_)
+    ));
 }

@@ -42,15 +42,9 @@ pub struct ObsidianFile {
 
 async fn allowed_object_type(
     kg: &KnowledgeGraph,
-    relationship_type: &str,
+    relationship_type_id: i16,
     subject_type: EntityType,
 ) -> Result<EntityType, KnowledgeError> {
-    let Some(relationship_type_id) = kg
-        .resolve_emit_eligible_relationship_type(relationship_type)
-        .await?
-    else {
-        return Ok(EntityType::Concept);
-    };
     let allowed_type: Option<i16> = sqlx::query_scalar(
         "SELECT allowed_object_type_id \
          FROM relationship_constraints \
@@ -384,10 +378,29 @@ async fn import_document(
         .chain(document.facts.iter().map(|line| (SECTION_FACTS, line)));
 
     for (section, line) in all_lines {
+        let relationship_type_id = match kg
+            .resolve_emit_eligible_relationship_type(&line.predicate)
+            .await
+        {
+            Ok(Some(relationship_type_id)) => relationship_type_id,
+            Ok(None) => {
+                outcome.errors.push(format!(
+                    "{}: predicate '{}' is not an emit-eligible taxonomy leaf",
+                    file.relative_path, line.predicate
+                ));
+                continue;
+            }
+            Err(error) => {
+                outcome
+                    .errors
+                    .push(format!("{}: {error}", file.relative_path));
+                continue;
+            }
+        };
         let (object_name, object_id) = plan_object(
             kg,
             &line.object,
-            &line.predicate,
+            relationship_type_id,
             subject.as_ref().map_or(
                 document.entity_type.unwrap_or(EntityType::Concept),
                 |entity| EntityType::try_from(entity.entity_type_id).unwrap_or(EntityType::Concept),
@@ -566,7 +579,7 @@ async fn import_document(
 async fn plan_object(
     kg: &KnowledgeGraph,
     object: &ObsidianObject,
-    relationship_type: &str,
+    relationship_type_id: i16,
     subject_type: EntityType,
     dry_run: bool,
     counts: &mut ObsidianImportCounts,
@@ -594,7 +607,8 @@ async fn plan_object(
             if dry_run {
                 Ok((name.clone(), None))
             } else {
-                let object_type = allowed_object_type(kg, relationship_type, subject_type).await?;
+                let object_type =
+                    allowed_object_type(kg, relationship_type_id, subject_type).await?;
                 let (entity, _) = resolve_or_create(kg, name, object_type).await?;
                 Ok((entity.name.clone(), Some(entity.id)))
             }

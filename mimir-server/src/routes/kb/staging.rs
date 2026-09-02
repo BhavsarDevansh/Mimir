@@ -4,10 +4,12 @@ use std::sync::Arc;
 
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::Response,
 };
+
+use serde::Deserialize;
 
 use mimir_api_types::{
     MapUnrecognizedFactRequest, MapUnrecognizedFactResponse, RejectUnrecognizedFactRequest,
@@ -17,13 +19,34 @@ use mimir_api_types::{
 use crate::error;
 use crate::state::AppState;
 
+const MAX_STAGED_PAGE_SIZE: i64 = 100;
+
+#[derive(Debug, Deserialize)]
+pub struct StagedListQuery {
+    /// Maximum number of rows to return, bounded server-side.
+    pub limit: Option<i64>,
+    /// Number of rows to skip before the first returned row.
+    pub offset: Option<i64>,
+}
+
 /// GET /kb/staged — list durable unrecognized-predicate facts.
 pub async fn kb_staged_list_handler(
     State(state): State<Arc<AppState>>,
+    Query(query): Query<StagedListQuery>,
 ) -> Result<Json<UnrecognizedFactListResponse>, Response> {
-    let rows = state
+    let limit = query.limit.unwrap_or(MAX_STAGED_PAGE_SIZE);
+    if !(1..=MAX_STAGED_PAGE_SIZE).contains(&limit) {
+        return Err(error::bad_request(format!(
+            "limit must be between 1 and {MAX_STAGED_PAGE_SIZE}"
+        )));
+    }
+    let offset = query.offset.unwrap_or(0);
+    if offset < 0 {
+        return Err(error::bad_request("offset must be zero or greater"));
+    }
+    let (rows, total) = state
         .knowledge_graph
-        .list_unrecognized_facts(Some("unmapped"))
+        .list_unrecognized_facts(Some("unmapped"), limit, offset)
         .await
         .map_err(error::knowledge_error)?;
     let items: Vec<UnrecognizedFactRow> = rows
@@ -42,7 +65,7 @@ pub async fn kb_staged_list_handler(
         })
         .collect();
     Ok(Json(UnrecognizedFactListResponse {
-        total: items.len(),
+        total: usize::try_from(total).unwrap_or(usize::MAX),
         items,
     }))
 }

@@ -137,9 +137,8 @@ impl HookHandler for EmailExtractionHook {
                     payload.connector_type,
                     ExtractionMethod::LlmExtraction,
                 );
-                let mut staged_count = 0i64;
                 for staged_fact in &outcome.staged {
-                    let staged = match payload
+                    if let Err(error) = payload
                         .kg
                         .stage_unrecognized_fact(
                             Some(payload.instance_id),
@@ -150,21 +149,15 @@ impl HookHandler for EmailExtractionHook {
                         )
                         .await
                     {
-                        Ok(staged) => staged,
-                        Err(error) => {
-                            warn!(
-                                raw_ref = %payload.raw_ref,
-                                "staging unrecognized email fact failed: {error}"
-                            );
-                            return terminal_or_retry(
-                                payload,
-                                ctx,
-                                format!("failed to stage unrecognized fact: {error}"),
-                            );
-                        }
-                    };
-                    if staged.newly_staged {
-                        staged_count += 1;
+                        warn!(
+                            raw_ref = %payload.raw_ref,
+                            "staging unrecognized email fact failed: {error}"
+                        );
+                        return terminal_or_retry(
+                            payload,
+                            ctx,
+                            format!("failed to stage unrecognized fact: {error}"),
+                        );
                     }
                 }
 
@@ -192,14 +185,14 @@ impl HookHandler for EmailExtractionHook {
                         // Cumulative acceptance counters (issue #508) so
                         // `mimir connector list` / `status` surfaces the
                         // drop rate instead of hiding it behind `items`.
-                        if accepted + dropped + staged_count > 0
+                        if accepted + dropped > 0
                             && let Err(error) = payload
                                 .kg
                                 .record_connector_fact_counts(
                                     payload.instance_id,
                                     accepted,
                                     dropped,
-                                    staged_count,
+                                    0,
                                 )
                                 .await
                         {

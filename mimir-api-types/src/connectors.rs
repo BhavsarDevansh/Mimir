@@ -66,6 +66,7 @@ pub struct ConnectorResponse {
     /// visible instead of hiding behind `item_count`.
     pub facts_dropped: i64,
     /// Cumulative LLM-emitted facts staged for governance review (#468).
+    #[serde(default)]
     pub facts_staged: i64,
     /// Non-secret auth configuration from the stored config (issue #507):
     /// surfaced so `mimir connector auth` can re-run the PKCE flow for an
@@ -445,6 +446,34 @@ mod tests {
         assert_eq!(roundtrip(&resp), resp);
         let json = serde_json::to_value(&resp).unwrap();
         assert!(!json.as_object().unwrap().contains_key("auth"));
+    }
+
+    #[test]
+    fn connector_response_defaults_missing_facts_staged() {
+        let resp = ConnectorResponse {
+            id: 1,
+            connector_type: "email".to_string(),
+            slug: "mail".to_string(),
+            backend: "imap".to_string(),
+            display_name: "Mail".to_string(),
+            status: "active".to_string(),
+            auth_state: "authenticated".to_string(),
+            mode: None,
+            sync_cursor: None,
+            last_sync_at: None,
+            last_error: None,
+            created_at: "2026-08-11T00:00:00Z".to_string(),
+            updated_at: "2026-08-11T00:00:00Z".to_string(),
+            item_count: 0,
+            facts_accepted: 0,
+            facts_dropped: 0,
+            facts_staged: 0,
+            auth: None,
+        };
+        let mut json = serde_json::to_value(&resp).unwrap();
+        json.as_object_mut().unwrap().remove("facts_staged");
+        let parsed: ConnectorResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed, resp);
     }
 
     #[test]

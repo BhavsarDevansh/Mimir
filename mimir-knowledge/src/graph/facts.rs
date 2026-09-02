@@ -28,11 +28,15 @@ impl KnowledgeGraph {
         if let Some(name) = self.relationship_type_name(relationship_type_id).await {
             fact.relationship_type = name;
         }
-        if fact.category_ids.is_empty()
-            && let Some(category_id) = self
+        if fact.category_ids.is_empty() {
+            let category_id = self
                 .default_category_id_for_relationship_type(relationship_type_id)
                 .await?
-        {
+                .ok_or_else(|| {
+                    KnowledgeError::Validation(format!(
+                        "emit-eligible relationship type {relationship_type_id} has no default category rule",
+                    ))
+                })?;
             fact.category_ids.push(category_id);
         }
         Ok(relationship_type_id)

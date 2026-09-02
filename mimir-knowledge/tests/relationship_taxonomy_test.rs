@@ -160,9 +160,10 @@ async fn unrecognized_facts_are_staged_and_resolvable() {
 
     let staged = tg
         .kg
-        .list_unrecognized_facts(Some("unmapped"))
+        .list_unrecognized_facts(Some("unmapped"), 100, 0)
         .await
-        .unwrap();
+        .unwrap()
+        .0;
     assert_eq!(staged.len(), 1);
     assert_eq!(staged[0].id, id);
     assert_eq!(staged[0].relationship_type_raw, "owes");
@@ -178,7 +179,12 @@ async fn unrecognized_facts_are_staged_and_resolvable() {
         .resolve_unrecognized_fact(id, leaf, Some("mapped for review"))
         .await
         .unwrap();
-    let mapped = tg.kg.list_unrecognized_facts(Some("mapped")).await.unwrap();
+    let mapped = tg
+        .kg
+        .list_unrecognized_facts(Some("mapped"), 100, 0)
+        .await
+        .unwrap()
+        .0;
     assert_eq!(mapped.len(), 1);
     assert_eq!(mapped[0].proposed_relationship_type_id, Some(leaf));
 }
@@ -212,9 +218,10 @@ async fn staged_fact_resolution_is_governed() {
         .unwrap();
     let rejected = tg
         .kg
-        .list_unrecognized_facts(Some("rejected"))
+        .list_unrecognized_facts(Some("rejected"), 100, 0)
         .await
-        .unwrap();
+        .unwrap()
+        .0;
     assert_eq!(rejected.len(), 1);
     assert_eq!(rejected[0].status, "rejected");
     assert_eq!(rejected[0].resolution_note.as_deref(), Some("not relevant"));
@@ -233,9 +240,10 @@ async fn distinct_unknown_facts_with_the_same_source_predicate_are_all_staged() 
 
     let staged = tg
         .kg
-        .list_unrecognized_facts(Some("unmapped"))
+        .list_unrecognized_facts(Some("unmapped"), 100, 0)
         .await
-        .unwrap();
+        .unwrap()
+        .0;
     assert_eq!(staged.len(), 2, "each distinct payload must survive");
 }
 
@@ -260,9 +268,10 @@ async fn duplicate_chat_facts_with_null_source_fields_are_staged_once() {
     assert_eq!(first.id, second.id);
     assert_eq!(
         tg.kg
-            .list_unrecognized_facts(Some("unmapped"))
+            .list_unrecognized_facts(Some("unmapped"), 100, 0)
             .await
             .unwrap()
+            .0
             .len(),
         1
     );
@@ -375,9 +384,10 @@ async fn normalization_stages_unknown_predicates_instead_of_inserting_them() {
     assert!(!outcome.errors.is_empty());
     let staged = tg
         .kg
-        .list_unrecognized_facts(Some("unmapped"))
+        .list_unrecognized_facts(Some("unmapped"), 100, 0)
         .await
-        .unwrap();
+        .unwrap()
+        .0;
     assert_eq!(staged.len(), 1);
     assert_eq!(staged[0].connector_instance_id, Some(1));
     assert_eq!(staged[0].raw_reference.as_deref(), Some("gmail:17:8"));

@@ -48,8 +48,10 @@ impl KnowledgeGraph {
     }
 
     /// Store an unrecognized fact durably for governance instead of dropping
-    /// it. The full producer payload is retained so approval can later map
-    /// the fact without re-extraction.
+    /// it. For connector rows, the staged counter is incremented in the same
+    /// transaction, so a retryable later failure cannot lose the count. The
+    /// full producer payload is retained so approval can later map the fact
+    /// without re-extraction.
     pub async fn stage_unrecognized_fact(
         &self,
         connector_instance_id: Option<i32>,
@@ -75,7 +77,20 @@ impl KnowledgeGraph {
         .execute(&mut *tx)
         .await?;
 
-        let id = if inserted.rows_affected() == 1 {
+        let newly_staged = inserted.rows_affected() == 1;
+        if newly_staged && connector_instance_id.is_some() {
+            sqlx::query(
+                "UPDATE connectors \
+                 SET facts_staged = facts_staged + 1, updated_at = ? \
+                 WHERE id = ?",
+            )
+            .bind(now)
+            .bind(connector_instance_id)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        let id = if newly_staged {
             inserted.last_insert_rowid()
         } else {
             sqlx::query_scalar(
@@ -92,27 +107,39 @@ impl KnowledgeGraph {
             .await?
         };
         tx.commit().await?;
-        Ok(UnrecognizedFactStage {
-            id,
-            newly_staged: inserted.rows_affected() == 1,
-        })
+        Ok(UnrecognizedFactStage { id, newly_staged })
     }
 
     /// List unrecognized facts, optionally filtered by governance status.
     pub async fn list_unrecognized_facts(
         &self,
         status: Option<&str>,
-    ) -> Result<Vec<UnrecognizedFact>, KnowledgeError> {
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<UnrecognizedFact>, i64), KnowledgeError> {
+        let mut tx = self.pool.begin().await?;
+        let total: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) \
+             FROM unrecognized_facts \
+             WHERE (?1 IS NULL OR status = ?1)",
+        )
+        .bind(status)
+        .fetch_one(&mut *tx)
+        .await?;
         let rows = sqlx::query_as::<_, UnrecognizedFact>(
             "SELECT id, connector_instance_id, raw_reference, relationship_type_raw, payload_json, status, proposed_relationship_type_id, resolution_note, created_at, updated_at \
              FROM unrecognized_facts \
              WHERE (?1 IS NULL OR status = ?1) \
-             ORDER BY created_at ASC, id ASC",
+             ORDER BY created_at ASC, id ASC \
+             LIMIT ?2 OFFSET ?3",
         )
         .bind(status)
-        .fetch_all(&self.pool)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&mut *tx)
         .await?;
-        Ok(rows)
+        tx.commit().await?;
+        Ok((rows, total))
     }
 
     /// Mark a staged fact as mapped to an existing controlled leaf.

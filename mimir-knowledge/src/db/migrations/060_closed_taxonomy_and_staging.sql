@@ -3,7 +3,7 @@
 ALTER TABLE relationship_types ADD COLUMN parent_id INTEGER REFERENCES relationship_types(id);
 ALTER TABLE relationship_types ADD COLUMN depth INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE relationship_types ADD COLUMN node_kind TEXT NOT NULL DEFAULT 'leaf';
-ALTER TABLE relationship_types ADD COLUMN emit_eligible INTEGER NOT NULL DEFAULT TRUE;
+ALTER TABLE relationship_types ADD COLUMN emit_eligible INTEGER NOT NULL DEFAULT FALSE;
 ALTER TABLE relationship_types ADD COLUMN definition TEXT NOT NULL DEFAULT '';
 ALTER TABLE relationship_types ADD COLUMN render_template TEXT;
 ALTER TABLE relationship_types ADD COLUMN dedup_key TEXT;

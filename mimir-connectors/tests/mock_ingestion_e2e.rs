@@ -355,6 +355,12 @@ async fn push_mock_syncs_canned_facts_into_kb() {
         .iter()
         .find(|f| f.object_literal.as_deref() == Some("Dan"))
         .expect("has_partner Dan fact not found");
+    assert_eq!(
+        kg.relationship_type_name(partner.relationship_type_id)
+            .await
+            .as_deref(),
+        Some("has_partner")
+    );
     assert_connector_source(&kg, partner.id, row.id, "p-1").await;
 
     // Manual triggers are unsupported for push connectors (F9 contract).

@@ -393,7 +393,7 @@ mimir kb reject 42 --reason "entered in error"
 
 ### `mimir kb staged`
 
-Review facts staged when their relationship predicate was outside the closed taxonomy. List unmapped rows, map a row to an existing leaf, or reject it. Mapping is explicit and validates that the target leaf is emit-eligible; staged facts are never auto-created or auto-dropped.
+Review facts staged when their relationship predicate was outside the closed taxonomy. List unmapped rows, map a row to an existing leaf, or reject it. The daemon paginates the backing API with a default and maximum page size of 100, so a large review backlog cannot load every payload at once. Mapping is explicit and validates that the target leaf is emit-eligible; staged facts are never auto-created or auto-dropped.
 
 ```bash
 mimir kb staged list

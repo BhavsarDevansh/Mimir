@@ -552,7 +552,7 @@ type: Person
     };
     let outcome = kg.import_obsidian(&[file], false).await.unwrap();
     assert_eq!(outcome.errors.len(), 0, "errors: {:?}", outcome.errors);
-    assert_eq!(outcome.counts.facts_new, 1);
+    assert_eq!(outcome.counts.facts_new, 0);
 }
 
 #[tokio::test]
@@ -1050,6 +1050,39 @@ type: Person
             .await
             .unwrap();
     assert_eq!(prefs[0].value, "French", "user-set value kept");
+}
+
+#[tokio::test]
+async fn import_does_not_create_entities_for_invalid_predicates() {
+    let (kg, _dir) = fresh_kg().await;
+    let file = ObsidianFile {
+        relative_path: "Devansh.md".to_string(),
+        content: r#"---
+type: Person
+---
+
+# Devansh
+
+## Facts
+- owes → [[Dan]]
+"#
+        .to_string(),
+    };
+
+    let outcome = kg.import_obsidian(&[file], false).await.unwrap();
+    assert_eq!(outcome.counts.facts_new, 0);
+    assert!(
+        outcome
+            .errors
+            .iter()
+            .any(|error| error.contains("owes") && error.contains("emit-eligible")),
+        "invalid predicate surfaced: {:?}",
+        outcome.errors
+    );
+    assert!(
+        kg.search_entities("Dan", 10).await.unwrap().is_empty(),
+        "invalid predicate must not create an object entity"
+    );
 }
 
 #[tokio::test]

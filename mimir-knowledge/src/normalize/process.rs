@@ -33,7 +33,9 @@ pub(super) enum ProcessResult {
 /// confidence from the provenance, validate categories, run the sensitivity
 /// gate, and insert (inheriting corroboration / supersession / inference from
 /// `insert_fact_in_tx`). Sensitive facts land as `pending_confirmation`.
-/// Per-fact errors are tolerated so one bad fact never aborts the batch.
+/// Per-fact validation and insertion errors are tolerated so one bad fact
+/// never aborts the batch; a failed durable staging write is a hard error so
+/// the source item is never acknowledged without its staged record.
 pub async fn normalize_and_insert(
     kg: &KnowledgeGraph,
     facts: Vec<NormalizedFact>,
@@ -89,7 +91,7 @@ pub async fn normalize_and_insert(
                     )
                     .await
                 {
-                    outcome.errors.push(error);
+                    return Err(error);
                 } else {
                     outcome.errors.push(KnowledgeError::Validation(format!(
                         "predicate '{}' is not an emit-eligible taxonomy leaf; staged for review",

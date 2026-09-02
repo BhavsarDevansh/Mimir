@@ -164,30 +164,36 @@ impl<'a> OptimizationRunner<'a> {
         )
         .await?;
 
-        let mut valid_pairs = HashMap::new();
+        let mut valid_pairs = HashSet::new();
+        let mut current_confidences = HashMap::new();
         for row in &candidates {
             let pair = (
                 row.try_get::<i32, _>("fact_a_id")?,
                 row.try_get::<i32, _>("fact_b_id")?,
             );
-            valid_pairs.insert(
-                pair,
-                (
-                    row.try_get::<f32, _>("confidence_a")?,
-                    row.try_get::<f32, _>("confidence_b")?,
-                ),
-            );
+            valid_pairs.insert(pair);
+            current_confidences
+                .entry(pair.0)
+                .or_insert(row.try_get::<f32, _>("confidence_a")?);
+            current_confidences
+                .entry(pair.1)
+                .or_insert(row.try_get::<f32, _>("confidence_b")?);
         }
         let mut queued = 0;
+        let mut merged_duplicates = HashSet::new();
         for candidate in response.candidates {
             let pair = ordered_pair(candidate.fact_a_id, candidate.fact_b_id);
-            if !valid_pairs.contains_key(&pair) {
+            if !valid_pairs.contains(&pair) {
+                continue;
+            }
+            if merged_duplicates.contains(&pair.0) || merged_duplicates.contains(&pair.1) {
                 continue;
             }
             if candidate.suggested_action == "merge" && candidate.llm_confidence >= 0.9 {
                 let mut tx = self.kg.pool().begin().await?;
-                let (keep_confidence, duplicate_confidence) = valid_pairs[&pair];
-                merge_fact_pair(
+                let keep_confidence = current_confidences[&pair.0];
+                let duplicate_confidence = current_confidences[&pair.1];
+                let boosted = merge_fact_pair(
                     &mut tx,
                     self.kg.now(),
                     pair.0,
@@ -196,6 +202,8 @@ impl<'a> OptimizationRunner<'a> {
                     duplicate_confidence,
                 )
                 .await?;
+                current_confidences.insert(pair.0, boosted);
+                merged_duplicates.insert(pair.1);
                 tx.commit().await?;
             } else {
                 sqlx::query(

@@ -447,6 +447,88 @@ async fn semantic_dedup_queues_uncertain_llm_candidate() {
 }
 
 #[tokio::test]
+async fn semantic_dedup_preserves_confidence_boosts_across_merges() {
+    let graph = TestGraph::new().await;
+    let person = graph.create_person("Devansh").await;
+    let rome = graph.create_place("Rome").await;
+
+    let fact_a = graph
+        .create_fact(person, "visited", Some(rome), SourceType::Connector)
+        .await;
+    let fact_b = graph
+        .create_fact(person, "trip_to", Some(rome), SourceType::Import)
+        .await;
+    let fact_c = graph
+        .create_fact(person, "travelled_to", Some(rome), SourceType::Import)
+        .await;
+
+    for fact_id in [fact_a.id, fact_b.id, fact_c.id] {
+        sqlx::query("UPDATE facts SET confidence = ? WHERE id = ?")
+            .bind(0.70)
+            .bind(fact_id)
+            .execute(graph.kg.pool())
+            .await
+            .unwrap();
+    }
+
+    let args = format!(
+        r#"{{"candidates":[
+            {{"fact_a_id":{},"fact_b_id":{},"suggested_action":"merge","llm_confidence":0.95}},
+            {{"fact_a_id":{},"fact_b_id":{},"suggested_action":"merge","llm_confidence":0.95}},
+            {{"fact_a_id":{},"fact_b_id":{},"suggested_action":"merge","llm_confidence":0.95}}
+        ]}}"#,
+        fact_a.id, fact_b.id, fact_a.id, fact_c.id, fact_a.id, fact_b.id
+    );
+
+    let llm: Arc<dyn LlmBackend> = Arc::new(
+        MockLlmClient::builder()
+            .push_chat_message(
+                Message {
+                    role: "assistant".to_string(),
+                    content: String::new(),
+                    tool_calls: Some(vec![ToolCall {
+                        index: 0,
+                        id: "call_1".to_string(),
+                        call_type: "function".to_string(),
+                        function: FunctionCall {
+                            name: "evaluate_dedup_candidates".to_string(),
+                            arguments: args,
+                        },
+                    }]),
+                    tool_call_id: None,
+                },
+                Usage::default(),
+            )
+            .build(),
+    );
+    let runner = OptimizationRunner::new(
+        &graph.kg,
+        OptimizationConfig::for_test(graph.backup_dir()),
+        Some(llm),
+    );
+
+    runner
+        .run_pass(PassName::SemanticDeduplication)
+        .await
+        .unwrap();
+
+    let keep_confidence: f32 = sqlx::query_scalar("SELECT confidence FROM facts WHERE id = ?")
+        .bind(fact_a.id)
+        .fetch_one(graph.kg.pool())
+        .await
+        .unwrap();
+    assert!((keep_confidence - 0.80).abs() < 1e-6);
+    for duplicate_id in [fact_b.id, fact_c.id] {
+        let status: i16 = sqlx::query_scalar("SELECT fact_status_id FROM facts WHERE id = ?")
+            .bind(duplicate_id)
+            .fetch_one(graph.kg.pool())
+            .await
+            .unwrap();
+        assert_eq!(status, FactStatus::Superseded as i16);
+    }
+}
+
+#[tokio::test]
 async fn dormant_cleanup_forgets_old_disputed_non_user_fact() {
     let graph = TestGraph::new().await;
     let person = graph.create_person("Devansh").await;

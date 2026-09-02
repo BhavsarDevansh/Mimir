@@ -203,7 +203,7 @@ The daemon exposes `GET /v1/models` and `POST /v1/chat/completions` (blocking + 
 - Composed into the system prompt as the final block, after the preset tone text and the shared operating directives, combined with an upcoming-events section rendered from the events overlay; each LLM-facing composition starts with a request-current `Now:` RFC 3339 UTC + weekday anchor (issue #472), while the condensation cache stays timestamp-free
 - Auto-managed: hook-driven chat extraction (`remember.chat`), background ingestion, and nightly optimization add, replace, remove, and re-rank facts
 - Regenerated on demand: a fact insert/update/delete that ranks in the top-N, `mimir memory --refresh`, or nightly optimization completion; the background scheduler runs condensation only during LLM downtime
-- Frozen per session: sessions reuse the system prompt captured at session creation; only the native route's explicit `incognito: true` turns build a fresh prompt — the OpenAI surface has no incognito path (issue #473)
+- Frozen per session: native and OpenAI sessions keep the core system-prompt block captured at session creation, while the leading `Now:` anchor is replaced with a request-local value on every request; the native route's explicit `incognito: true` turns build a fresh prompt, and the OpenAI surface has no incognito path (issues #472, #473)
 - No file: the legacy `memory.md` file-backed system was deleted in v0.37.0 (issue #111); see `docs/memory-system.md` for the full pipeline
 
 ### Context Manager

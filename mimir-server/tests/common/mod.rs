@@ -18,10 +18,11 @@ pub fn assert_current_now_stamp(content: &str) {
         content.starts_with("Now: "),
         "memory-bearing composition must begin with the Now stamp: {content}"
     );
-    let index = content
-        .find("Now: ")
+    let stamp = content
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("Now: "))
         .expect("memory context carries a Now stamp");
-    let stamp = &content[index + "Now: ".len()..];
     let timestamp = stamp
         .split_whitespace()
         .next()

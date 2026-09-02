@@ -7,7 +7,7 @@ pub mod tool_output;
 pub mod types;
 
 pub use backend::{LlmBackend, LlmStream, LlmTextStream};
-pub use client::LlmClient;
+pub use client::{LlmClient, RetryConfig};
 #[cfg(any(test, feature = "mock-llm"))]
 pub use mock::MockLlmClient;
 pub use pool::{LlmWorkerPool, WorkerPoolConfig};

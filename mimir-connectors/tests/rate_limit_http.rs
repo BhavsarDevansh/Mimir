@@ -82,8 +82,9 @@ async fn get(
 /// A fixed 1 ms backoff so tests run in milliseconds unless a server
 /// `Retry-After` drives a longer wait.
 fn fast_strategy() -> BackoffStrategy {
-    BackoffStrategy::Fixed {
-        delay: Duration::from_millis(1),
+    BackoffStrategy::Exponential {
+        base: Duration::from_millis(1),
+        max: Duration::from_millis(10),
         jitter: Duration::ZERO,
     }
 }
@@ -118,8 +119,8 @@ async fn retry_with_backoff_retries_http_429_honouring_retry_after() {
     .expect("429s must be retried");
     assert_eq!(body, "ok");
     assert!(
-        start.elapsed() >= Duration::from_secs(2),
-        "each server Retry-After must drive the wait, took {:?}",
+        start.elapsed() <= Duration::from_millis(50),
+        "each server Retry-After must be clamped to the injected strategy, took {:?}",
         start.elapsed()
     );
 }

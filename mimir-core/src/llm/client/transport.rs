@@ -178,7 +178,7 @@ impl LlmClient {
                 Err(e) => {
                     attempt += 1;
 
-                    if attempt > MAX_RETRIES {
+                    if attempt >= u32::from(self.retry_config.max_attempts) {
                         error!(attempts = attempt, "retry exhausted");
                         return Err(LlmError::RetryExhausted {
                             attempts: attempt,
@@ -190,14 +190,14 @@ impl LlmClient {
                         return Err(e);
                     }
 
-                    let backoff = Self::calculate_backoff(attempt);
+                    let backoff = self.calculate_backoff(attempt);
                     warn!(
                         attempt = attempt,
-                        backoff_ms = backoff,
+                        backoff_ms = backoff.as_millis(),
                         error = %e,
                         "transient error, retrying"
                     );
-                    tokio::time::sleep(Duration::from_millis(backoff)).await;
+                    tokio::time::sleep(backoff).await;
                 }
             }
         }
@@ -227,8 +227,10 @@ impl LlmClient {
     }
 
     /// Calculate the backoff duration for a given attempt number.
-    pub(super) fn calculate_backoff(attempt: u32) -> u64 {
-        let exponential = BASE_BACKOFF_MS.saturating_mul(2u64.saturating_pow(attempt));
-        exponential.min(MAX_BACKOFF_MS)
+    pub(super) fn calculate_backoff(&self, attempt: u32) -> Duration {
+        self.retry_config
+            .base_backoff
+            .saturating_mul(2u32.saturating_pow(attempt))
+            .min(self.retry_config.max_backoff)
     }
 }

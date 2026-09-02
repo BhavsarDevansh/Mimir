@@ -14,7 +14,7 @@
 |--------|------|-------------|
 | `id` | INTEGER | PK, AUTOINCREMENT |
 | `subject_id` | INTEGER | NOT NULL, FK → `entities(id)` |
-| `predicate_id` | INTEGER | NOT NULL, FK → `predicates(id)` |
+| `relationship_type_id` | INTEGER | NOT NULL, FK → `relationship_types(id)` |
 | `object_id` | INTEGER | FK → `entities(id)`, nullable |
 | `object_literal` | TEXT | nullable |
 | `valid_from` | TIMESTAMP | nullable |
@@ -25,7 +25,7 @@
 | `created_at` | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP |
 | `updated_at` | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP |
 
-Indexes: `subject_id`, `object_id`, `predicate_id`, `fact_status_id`, `valid_from + valid_until`.
+Indexes include `subject_id`, `relationship_type_id`, `object_id`, `fact_status_id`, `valid_from + valid_until`, and the composite `idx_facts_subject_relationship ON facts(subject_id, relationship_type_id)` used by overlap, triple-existence, and traversal scans. The `idx_facts_tool_query` composite covers the pending-aware tool-query path.
 
 ### `fact_dependencies` table
 
@@ -53,7 +53,7 @@ The HTTP API renders `fact_status_id`, `source_type_id`, `change_type_id`, `chan
 
 ## Temporal Logic
 
-When inserting a fact with the same `subject_id + predicate_id` as existing facts, the system evaluates temporal overlap:
+When inserting a fact with the same `subject_id + relationship_type_id` as existing facts, the system evaluates temporal overlap:
 
 1. **Non-overlapping ranges** — both facts remain `Active` (timeline).
 2. **Old open-ended + new explicit start** — the old fact’s `valid_until` is closed at `now()`; the new fact is `Active`.

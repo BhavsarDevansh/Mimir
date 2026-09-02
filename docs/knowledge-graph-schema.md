@@ -187,6 +187,9 @@ Migrations are strictly ordered by foreign-key dependencies:
 47. `054` — Rename the legacy `gmail` connector type to the generic `Email` name (the IMAP connector is a generic client; the legacy `gmail` wire string stays accepted as an alias) (#400)
 48. `055` — `entity_merge_queue.suggested_action` / `llm_confidence` columns for the LLM semantic entity-dedup pass (#282)
 49. `056` — `optimization_pass_runs.entity_merges_queued` counter for the entity semantic-dedup pass (#282)
+50. `057` — Connector fact-acceptance counters for LLM-prose extraction outcomes (#508)
+51. `058` — Recurrence interval and series bounds on event and pending-event overlays (PR #513 review)
+52. `059` — `facts(subject_id, relationship_type_id)` composite index for overlap, triple-existence, and traversal scans (#527)
 
 ---
 

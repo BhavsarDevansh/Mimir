@@ -204,7 +204,7 @@ Migrations are strictly ordered by foreign-key dependencies:
 
 ### Write Batching
 
-Entity creation batches aliases into a single multi-row `INSERT OR IGNORE` statement inside the entity transaction (`mimir-knowledge/src/queries/entity/crud.rs`). The statement is bound rather than interpolated, is marked non-persistent because its SQL shape varies with alias count, and is skipped when an entity has no aliases.
+Entity creation batches aliases into multi-row `INSERT OR IGNORE` statements inside the entity transaction (`mimir-knowledge/src/queries/entity/crud.rs`). Typical entities use a single statement; batches are capped at 500 aliases to stay within the 999-parameter limit supported by older SQLite builds. The statements are bound rather than interpolated, are marked non-persistent because their SQL shape varies with alias count, and are skipped when an entity has no aliases.
 
 ---
 

@@ -45,7 +45,7 @@ When you mention a name, Mimir tries to resolve it in three steps:
 
 Resolution is **type-aware**: only entities matching the declared type (Person, Place, Organization, …) are considered, so "Apple" mentioned as a concept is never confused with the company "Apple Inc". If nothing matches — including a weak fuzzy hit — Mimir creates a new entity with the declared type. You can add or remove aliases at any time via the API; aliases are learned explicitly (for example through a `preferred_name` fact), not auto-guessed from fuzzy matches.
 
-When a new entity is created, all of its supplied aliases are saved together in one SQLite statement. This keeps entity creation quick while preserving the existing behavior: duplicate aliases are ignored, and an entity with no aliases makes no alias write.
+When a new entity is created, its supplied aliases are saved together in batched SQLite statements. This keeps entity creation quick while preserving the existing behavior: duplicate aliases are ignored, and an entity with no aliases makes no alias write.
 
 ### Relationship Types
 

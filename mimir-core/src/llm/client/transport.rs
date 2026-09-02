@@ -230,7 +230,7 @@ impl LlmClient {
     pub(super) fn calculate_backoff(&self, attempt: u32) -> Duration {
         self.retry_config
             .base_backoff
-            .saturating_mul(2u32.saturating_pow(attempt))
+            .saturating_mul(2u32.saturating_pow(attempt.saturating_sub(1)))
             .min(self.retry_config.max_backoff)
     }
 }

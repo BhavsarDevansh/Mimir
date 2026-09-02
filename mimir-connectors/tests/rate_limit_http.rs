@@ -118,10 +118,14 @@ async fn retry_with_backoff_retries_http_429_honouring_retry_after() {
     .await
     .expect("429s must be retried");
     assert_eq!(body, "ok");
+    let elapsed = start.elapsed();
     assert!(
-        start.elapsed() <= Duration::from_millis(50),
-        "each server Retry-After must be clamped to the injected strategy, took {:?}",
-        start.elapsed()
+        elapsed >= Duration::from_millis(20),
+        "each server Retry-After must honour the strategy ceiling, took {elapsed:?}"
+    );
+    assert!(
+        elapsed <= Duration::from_millis(50),
+        "each server Retry-After must be clamped to the injected strategy, took {elapsed:?}"
     );
 }
 

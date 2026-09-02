@@ -225,10 +225,9 @@ fn test_calculate_backoff_grows_exponentially() {
     let b2 = client.calculate_backoff(2);
     let b3 = client.calculate_backoff(3);
 
-    // The historical schedule multiplies by two before the first retry.
-    assert_eq!(b1, Duration::from_millis(400));
-    assert_eq!(b2, Duration::from_millis(800));
-    assert_eq!(b3, Duration::from_millis(1600));
+    assert_eq!(b1, Duration::from_millis(BASE_BACKOFF_MS));
+    assert_eq!(b2, Duration::from_millis(BASE_BACKOFF_MS * 2));
+    assert_eq!(b3, Duration::from_millis(BASE_BACKOFF_MS * 4));
 }
 
 #[test]

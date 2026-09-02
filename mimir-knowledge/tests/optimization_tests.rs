@@ -17,6 +17,58 @@ use mimir_knowledge::optimization::{OptimizationConfig, OptimizationRunner, Pass
 
 use common::TestGraph;
 
+struct UnmanagedFactSeed {
+    subject_id: i32,
+    relationship_type_id: i16,
+    object_id: Option<i32>,
+    object_literal: Option<String>,
+    confidence: f32,
+    valid_from: Option<DateTime<Utc>>,
+    valid_until: Option<DateTime<Utc>>,
+    source_type: Option<SourceType>,
+}
+
+async fn insert_unmanaged_fact(graph: &TestGraph, seed: UnmanagedFactSeed) -> i32 {
+    let now = Utc::now();
+    let fact_id: i32 = sqlx::query_scalar(
+        "INSERT INTO facts \
+         (subject_id, relationship_type_id, object_id, object_literal, valid_from, valid_until, \
+          confidence, fact_status_id, inferred, inference_depth, pending_confirmation, \
+         memory_priority_id, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 3, ?, ?) \
+         RETURNING id",
+    )
+    .bind(seed.subject_id)
+    .bind(seed.relationship_type_id)
+    .bind(seed.object_id)
+    .bind(&seed.object_literal)
+    .bind(seed.valid_from)
+    .bind(seed.valid_until)
+    .bind(seed.confidence)
+    .bind(FactStatus::Active as i16)
+    .bind(now)
+    .bind(now)
+    .fetch_one(graph.kg.pool())
+    .await
+    .unwrap();
+
+    if let Some(source_type) = seed.source_type {
+        sqlx::query(
+            "INSERT INTO sources \
+             (fact_id, source_type_id, connector_instance_id, connector_type_id, raw_reference, extracted_at, extraction_method_id) \
+             VALUES (?, ?, NULL, NULL, '', ?, NULL)",
+        )
+        .bind(fact_id)
+        .bind(source_type as i16)
+        .bind(now)
+        .execute(graph.kg.pool())
+        .await
+        .unwrap();
+    }
+
+    fact_id
+}
+
 #[tokio::test]
 async fn deterministic_dedup_merges_identical_fact_triples() {
     let graph = TestGraph::new().await;
@@ -32,35 +84,20 @@ async fn deterministic_dedup_merges_identical_fact_triples() {
     // insert time, so live duplicates can no longer coexist. The nightly dedup
     // pass remains a safety net for coexisting duplicates (legacy data, direct
     // writes), which is what we emulate here.
-    let now = Utc::now();
-    let second_id: i32 = sqlx::query_scalar(
-        "INSERT INTO facts \
-         (subject_id, relationship_type_id, object_id, object_literal, valid_from, valid_until, \
-          confidence, fact_status_id, inferred, inference_depth, pending_confirmation, \
-          memory_priority_id, created_at, updated_at) \
-         VALUES (?, ?, ?, NULL, NULL, NULL, 0.80, ?, 0, 0, 0, 3, ?, ?) \
-         RETURNING id",
+    let second_id = insert_unmanaged_fact(
+        &graph,
+        UnmanagedFactSeed {
+            subject_id: person,
+            relationship_type_id: first.relationship_type_id,
+            object_id: Some(london),
+            object_literal: None,
+            confidence: 0.80,
+            valid_from: None,
+            valid_until: None,
+            source_type: Some(SourceType::Import),
+        },
     )
-    .bind(person)
-    .bind(first.relationship_type_id)
-    .bind(london)
-    .bind(FactStatus::Active as i16)
-    .bind(now)
-    .bind(now)
-    .fetch_one(graph.kg.pool())
-    .await
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO sources \
-         (fact_id, source_type_id, connector_instance_id, connector_type_id, raw_reference, extracted_at, extraction_method_id) \
-         VALUES (?, ?, NULL, NULL, '', ?, NULL)",
-    )
-    .bind(second_id)
-    .bind(SourceType::Import as i16)
-    .bind(now)
-    .execute(graph.kg.pool())
-    .await
-    .unwrap();
+    .await;
 
     let runner = OptimizationRunner::new(
         &graph.kg,
@@ -98,6 +135,256 @@ async fn deterministic_dedup_merges_identical_fact_triples() {
         .await
         .unwrap();
     assert_eq!(old_status, FactStatus::Superseded as i16);
+}
+
+#[tokio::test]
+async fn deterministic_dedup_merges_all_duplicates_together() {
+    let graph = TestGraph::new().await;
+    let person = graph.create_person("Devansh").await;
+    let london = graph.create_place("London").await;
+
+    let first = graph
+        .create_fact(person, "lives_in", Some(london), SourceType::Connector)
+        .await;
+    let mut duplicate_ids = Vec::new();
+    for source_type in [SourceType::Import, SourceType::Interaction] {
+        let duplicate_id = insert_unmanaged_fact(
+            &graph,
+            UnmanagedFactSeed {
+                subject_id: person,
+                relationship_type_id: first.relationship_type_id,
+                object_id: Some(london),
+                object_literal: None,
+                confidence: 0.80,
+                valid_from: None,
+                valid_until: None,
+                source_type: Some(source_type),
+            },
+        )
+        .await;
+        duplicate_ids.push(duplicate_id);
+    }
+
+    let runner = OptimizationRunner::new(
+        &graph.kg,
+        OptimizationConfig::for_test(graph.backup_dir()),
+        None,
+    );
+
+    let summary = runner.run_pass(PassName::Deduplication).await.unwrap();
+
+    assert_eq!(summary.facts_merged, 2);
+    let active_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM facts WHERE subject_id = ? AND relationship_type_id = ? AND object_id = ? AND fact_status_id NOT IN (?, ?)",
+    )
+    .bind(person)
+    .bind(first.relationship_type_id)
+    .bind(london)
+    .bind(FactStatus::Superseded as i16)
+    .bind(FactStatus::Forgotten as i16)
+    .fetch_one(graph.kg.pool())
+    .await
+    .unwrap();
+    assert_eq!(active_count, 1);
+    let confidence: f32 = sqlx::query_scalar("SELECT confidence FROM facts WHERE id = ?")
+        .bind(first.id)
+        .fetch_one(graph.kg.pool())
+        .await
+        .unwrap();
+    assert!((confidence - 0.9).abs() < 1e-6);
+    let source_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sources WHERE fact_id = ?")
+        .bind(first.id)
+        .fetch_one(graph.kg.pool())
+        .await
+        .unwrap();
+    assert_eq!(source_count, 3);
+    let dependency_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM fact_dependencies WHERE child_fact_id = ?")
+            .bind(first.id)
+            .fetch_one(graph.kg.pool())
+            .await
+            .unwrap();
+    assert_eq!(dependency_count, 2);
+    for duplicate_id in duplicate_ids {
+        let status: i16 = sqlx::query_scalar("SELECT fact_status_id FROM facts WHERE id = ?")
+            .bind(duplicate_id)
+            .fetch_one(graph.kg.pool())
+            .await
+            .unwrap();
+        assert_eq!(status, FactStatus::Superseded as i16);
+    }
+}
+
+#[tokio::test]
+async fn deterministic_dedup_rolls_back_entire_merge_batch_on_failure() {
+    let graph = TestGraph::new().await;
+    let person = graph.create_person("Devansh").await;
+    let london = graph.create_place("London").await;
+
+    let first = graph
+        .create_fact(person, "lives_in", Some(london), SourceType::Connector)
+        .await;
+    let original_confidence = first.confidence;
+    let mut duplicate_ids = Vec::new();
+    for source_type in [SourceType::Import, SourceType::Interaction] {
+        let duplicate_id = insert_unmanaged_fact(
+            &graph,
+            UnmanagedFactSeed {
+                subject_id: person,
+                relationship_type_id: first.relationship_type_id,
+                object_id: Some(london),
+                object_literal: None,
+                confidence: 0.80,
+                valid_from: None,
+                valid_until: None,
+                source_type: Some(source_type),
+            },
+        )
+        .await;
+        duplicate_ids.push(duplicate_id);
+    }
+
+    sqlx::query(
+        "CREATE TRIGGER fail_second_merge BEFORE DELETE ON sources \
+         WHEN OLD.fact_id = (SELECT MAX(fact_id) FROM sources) \
+         BEGIN SELECT RAISE(ABORT, 'test merge failure'); END",
+    )
+    .execute(graph.kg.pool())
+    .await
+    .unwrap();
+
+    let runner = OptimizationRunner::new(
+        &graph.kg,
+        OptimizationConfig::for_test(graph.backup_dir()),
+        None,
+    );
+
+    let result = runner.run_pass(PassName::Deduplication).await;
+
+    assert!(result.is_err());
+    let first_status: i16 = sqlx::query_scalar("SELECT fact_status_id FROM facts WHERE id = ?")
+        .bind(first.id)
+        .fetch_one(graph.kg.pool())
+        .await
+        .unwrap();
+    let first_confidence: f32 = sqlx::query_scalar("SELECT confidence FROM facts WHERE id = ?")
+        .bind(first.id)
+        .fetch_one(graph.kg.pool())
+        .await
+        .unwrap();
+    let first_source_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM sources WHERE fact_id = ?")
+            .bind(first.id)
+            .fetch_one(graph.kg.pool())
+            .await
+            .unwrap();
+    let first_dependency_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM fact_dependencies WHERE child_fact_id = ?")
+            .bind(first.id)
+            .fetch_one(graph.kg.pool())
+            .await
+            .unwrap();
+    for duplicate_id in duplicate_ids {
+        let status: i16 = sqlx::query_scalar("SELECT fact_status_id FROM facts WHERE id = ?")
+            .bind(duplicate_id)
+            .fetch_one(graph.kg.pool())
+            .await
+            .unwrap();
+        assert_eq!(status, FactStatus::Active as i16);
+    }
+    assert_eq!(first_status, FactStatus::Active as i16);
+    assert!((first_confidence - original_confidence).abs() < 1e-6);
+    assert_eq!(first_source_count, 1);
+    assert_eq!(first_dependency_count, 0);
+}
+
+#[tokio::test]
+async fn deterministic_dedup_distinguishes_null_and_empty_literals() {
+    let graph = TestGraph::new().await;
+    let person = graph.create_person("Devansh").await;
+    let null_object_fact = graph
+        .create_fact(person, "knows_about", None, SourceType::Connector)
+        .await;
+    let empty_object_fact = insert_unmanaged_fact(
+        &graph,
+        UnmanagedFactSeed {
+            subject_id: person,
+            relationship_type_id: null_object_fact.relationship_type_id,
+            object_id: None,
+            object_literal: Some(String::new()),
+            confidence: 0.80,
+            valid_from: None,
+            valid_until: None,
+            source_type: Some(SourceType::Import),
+        },
+    )
+    .await;
+
+    let runner = OptimizationRunner::new(
+        &graph.kg,
+        OptimizationConfig::for_test(graph.backup_dir()),
+        None,
+    );
+
+    let summary = runner.run_pass(PassName::Deduplication).await.unwrap();
+
+    assert_eq!(summary.facts_merged, 0);
+    for fact_id in [null_object_fact.id, empty_object_fact] {
+        let status: i16 = sqlx::query_scalar("SELECT fact_status_id FROM facts WHERE id = ?")
+            .bind(fact_id)
+            .fetch_one(graph.kg.pool())
+            .await
+            .unwrap();
+        assert_eq!(status, FactStatus::Active as i16);
+    }
+}
+
+#[tokio::test]
+async fn deterministic_dedup_ignores_empty_intervals() {
+    let graph = TestGraph::new().await;
+    let person = graph.create_person("Devansh").await;
+    let london = graph.create_place("London").await;
+    let fact = graph
+        .create_fact(person, "lives_in", Some(london), SourceType::Connector)
+        .await;
+    let now = Utc::now();
+    sqlx::query("UPDATE facts SET valid_from = ?, valid_until = ? WHERE id = ?")
+        .bind(now)
+        .bind(now)
+        .bind(fact.id)
+        .execute(graph.kg.pool())
+        .await
+        .unwrap();
+    insert_unmanaged_fact(
+        &graph,
+        UnmanagedFactSeed {
+            subject_id: person,
+            relationship_type_id: fact.relationship_type_id,
+            object_id: Some(london),
+            object_literal: None,
+            confidence: 0.80,
+            valid_from: Some(now),
+            valid_until: Some(now),
+            source_type: None,
+        },
+    )
+    .await;
+
+    let runner = OptimizationRunner::new(
+        &graph.kg,
+        OptimizationConfig::for_test(graph.backup_dir()),
+        None,
+    );
+
+    let summary = runner.run_pass(PassName::Deduplication).await.unwrap();
+
+    assert_eq!(summary.facts_merged, 0);
+    let status: i16 = sqlx::query_scalar("SELECT fact_status_id FROM facts WHERE id = ?")
+        .bind(fact.id)
+        .fetch_one(graph.kg.pool())
+        .await
+        .unwrap();
+    assert_eq!(status, FactStatus::Active as i16);
 }
 
 #[tokio::test]
@@ -157,6 +444,88 @@ async fn semantic_dedup_queues_uncertain_llm_candidate() {
             .await
             .unwrap();
     assert_eq!(queued, 1);
+}
+
+#[tokio::test]
+async fn semantic_dedup_preserves_confidence_boosts_across_merges() {
+    let graph = TestGraph::new().await;
+    let person = graph.create_person("Devansh").await;
+    let rome = graph.create_place("Rome").await;
+
+    let fact_a = graph
+        .create_fact(person, "visited", Some(rome), SourceType::Connector)
+        .await;
+    let fact_b = graph
+        .create_fact(person, "trip_to", Some(rome), SourceType::Import)
+        .await;
+    let fact_c = graph
+        .create_fact(person, "travelled_to", Some(rome), SourceType::Import)
+        .await;
+
+    for fact_id in [fact_a.id, fact_b.id, fact_c.id] {
+        sqlx::query("UPDATE facts SET confidence = ? WHERE id = ?")
+            .bind(0.70)
+            .bind(fact_id)
+            .execute(graph.kg.pool())
+            .await
+            .unwrap();
+    }
+
+    let args = format!(
+        r#"{{"candidates":[
+            {{"fact_a_id":{},"fact_b_id":{},"suggested_action":"merge","llm_confidence":0.95}},
+            {{"fact_a_id":{},"fact_b_id":{},"suggested_action":"merge","llm_confidence":0.95}},
+            {{"fact_a_id":{},"fact_b_id":{},"suggested_action":"merge","llm_confidence":0.95}}
+        ]}}"#,
+        fact_a.id, fact_b.id, fact_a.id, fact_c.id, fact_a.id, fact_b.id
+    );
+
+    let llm: Arc<dyn LlmBackend> = Arc::new(
+        MockLlmClient::builder()
+            .push_chat_message(
+                Message {
+                    role: "assistant".to_string(),
+                    content: String::new(),
+                    tool_calls: Some(vec![ToolCall {
+                        index: 0,
+                        id: "call_1".to_string(),
+                        call_type: "function".to_string(),
+                        function: FunctionCall {
+                            name: "evaluate_dedup_candidates".to_string(),
+                            arguments: args,
+                        },
+                    }]),
+                    tool_call_id: None,
+                },
+                Usage::default(),
+            )
+            .build(),
+    );
+    let runner = OptimizationRunner::new(
+        &graph.kg,
+        OptimizationConfig::for_test(graph.backup_dir()),
+        Some(llm),
+    );
+
+    runner
+        .run_pass(PassName::SemanticDeduplication)
+        .await
+        .unwrap();
+
+    let keep_confidence: f32 = sqlx::query_scalar("SELECT confidence FROM facts WHERE id = ?")
+        .bind(fact_a.id)
+        .fetch_one(graph.kg.pool())
+        .await
+        .unwrap();
+    assert!((keep_confidence - 0.80).abs() < 1e-6);
+    for duplicate_id in [fact_b.id, fact_c.id] {
+        let status: i16 = sqlx::query_scalar("SELECT fact_status_id FROM facts WHERE id = ?")
+            .bind(duplicate_id)
+            .fetch_one(graph.kg.pool())
+            .await
+            .unwrap();
+        assert_eq!(status, FactStatus::Superseded as i16);
+    }
 }
 
 #[tokio::test]

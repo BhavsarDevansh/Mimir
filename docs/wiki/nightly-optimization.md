@@ -6,7 +6,7 @@ Every night Mimir performs a multi-step health check on your knowledge graph:
 
 1. **Back up** – creates a dated snapshot of the knowledge database.
 2. **Deduplicate** – merges identical facts and boosts their confidence.
-3. **Semantic deduplication** – asks the LLM whether similar facts should be merged; high-confidence merges happen automatically, uncertain ones are queued for your review.
+3. **Semantic deduplication** – asks the LLM whether similar facts should be merged; high-confidence merges happen automatically, uncertain ones are queued for your review. Each merge carries forward the fact's current confidence.
 4. **Entity semantic deduplication** – asks the LLM whether similar entities (shared aliases or near-identical names) are the same person, place, or thing. Candidates are only ever **queued for your review** — nothing is merged automatically.
 5. **Resolve contradictions** – keeps the most reliable version when facts disagree.
 6. **Recalculate confidence** – updates any fact flagged as needing recalculation, recomputing it from its parents and clearing the flag, then refreshing the facts inferred from it.
@@ -15,7 +15,7 @@ Every night Mimir performs a multi-step health check on your knowledge graph:
 
 ## What happens to my data?
 
-- Merged facts are marked **Superseded**, not deleted, so you can still trace their history.
+- Merged facts are marked **Superseded**, not deleted, so you can still trace their history. Exact merges are applied as one atomic batch, so a failure cannot leave the pass only partially merged.
 - Entity merge suggestions are never applied automatically — `mimir kb merges list` shows them and `mimir kb merges apply <id>` merges or `mimir kb merges keep <id>` marks the pair `KeptSeparate` so you can resolve a suggestion without merging.
 - Forgotten facts go to the **Trash** for 30 days before permanent removal.
 - Pending confirmations older than 7 days are automatically rejected and deleted.

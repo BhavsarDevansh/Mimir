@@ -15,8 +15,8 @@ use std::time::Duration;
 use serde_json::json;
 
 use mimir_connectors::{
-    ConnectorRegistry, ConnectorSupervisor, MockConnectorFactory, MockFactConfig, SupervisorConfig,
-    SyncOptions,
+    ConnectorRegistry, ConnectorSupervisor, MockConnectorFactory, MockFactConfig, MockSyncRecorder,
+    SupervisorConfig, SyncOptions,
 };
 use mimir_knowledge::KnowledgeGraph;
 use mimir_knowledge::models::connector::UpsertConnectorInput;
@@ -25,6 +25,9 @@ use mimir_knowledge::models::enums::{
     ConnectorAuthState, ConnectorStatus, ConnectorType, RecurrenceType,
 };
 use mimir_knowledge::models::source::{ExtractionMethod, SourceType};
+
+mod common;
+use common::{recording_registry, wait_for_async};
 
 // ---------------------------------------------------------------------------
 // Harness
@@ -87,23 +90,6 @@ fn upsert_mock(slug: &str, config: serde_json::Value) -> UpsertConnectorInput {
     }
 }
 
-async fn wait_for<F, Fut>(predicate: F, timeout: Duration)
-where
-    F: Fn() -> Fut,
-    Fut: std::future::Future<Output = bool>,
-{
-    let deadline = tokio::time::Instant::now() + timeout;
-    loop {
-        if predicate().await {
-            return;
-        }
-        if tokio::time::Instant::now() >= deadline {
-            panic!("wait_for timed out after {timeout:?}");
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-}
-
 /// Find the entity id for `name` via the public alias/FTS5 search, requiring
 /// an exact-name hit. Returns `None` when no such entity exists yet, so a poll
 /// loop can distinguish "not yet" from "never".
@@ -161,7 +147,13 @@ async fn polling_mock_syncs_canned_facts_into_kb() {
     let kg = Arc::new(kg);
 
     let (_tx, rx) = tokio::sync::watch::channel(false);
-    let supervisor = ConnectorSupervisor::new(mock_registry(), kg.clone(), fast_config(), rx);
+    let recorder = Arc::new(MockSyncRecorder::default());
+    let supervisor = ConnectorSupervisor::new(
+        recording_registry(Arc::clone(&recorder)),
+        kg.clone(),
+        fast_config(),
+        rx,
+    );
     assert_eq!(
         supervisor.restore().await.unwrap(),
         1,
@@ -169,7 +161,7 @@ async fn polling_mock_syncs_canned_facts_into_kb() {
     );
 
     // Wait for Alice's fact to land and the cursor to persist.
-    wait_for(
+    wait_for_async(
         || async {
             let row_ok = kg
                 .get_connector(row.id)
@@ -251,11 +243,17 @@ async fn mock_tombstones_trash_kb_facts_and_are_idempotent() {
     let kg = Arc::new(kg);
 
     let (_tx, rx) = tokio::sync::watch::channel(false);
-    let supervisor = ConnectorSupervisor::new(mock_registry(), kg.clone(), fast_config(), rx);
+    let recorder = Arc::new(MockSyncRecorder::default());
+    let supervisor = ConnectorSupervisor::new(
+        recording_registry(Arc::clone(&recorder)),
+        kg.clone(),
+        fast_config(),
+        rx,
+    );
     assert_eq!(supervisor.restore().await.unwrap(), 1);
 
     // The fact lands first.
-    wait_for(
+    wait_for_async(
         || async {
             let Some(alice) = entity_id(&kg, "Alice Tomb").await else {
                 return false;
@@ -270,7 +268,7 @@ async fn mock_tombstones_trash_kb_facts_and_are_idempotent() {
     .await;
 
     // The tombstone cycle trashes it; re-reported tombstones stay no-ops.
-    wait_for(
+    wait_for_async(
         || async {
             let Some(alice) = entity_id(&kg, "Alice Tomb").await else {
                 return true;
@@ -288,8 +286,11 @@ async fn mock_tombstones_trash_kb_facts_and_are_idempotent() {
     .await;
 
     // Give re-staged tombstones a cycle to prove they do not error and the
-    // facts do not resurrect.
-    tokio::time::sleep(Duration::from_millis(350)).await;
+    // facts do not resurrect. The recorder exposes the actual completion of
+    // that third cycle.
+    tokio::time::timeout(Duration::from_secs(5), recorder.wait_for_completed(3))
+        .await
+        .expect("third sync did not complete");
     let alice = entity_id(&kg, "Alice Tomb").await.expect("entity persists");
     assert!(
         kg.get_facts_by_subject(alice, 100)
@@ -331,7 +332,7 @@ async fn push_mock_syncs_canned_facts_into_kb() {
     assert_eq!(supervisor.restore().await.unwrap(), 1);
 
     // The push loop self-paces; the first cycle runs immediately and emits.
-    wait_for(
+    wait_for_async(
         || async {
             let Some(cara) = entity_id(&kg, "Cara Push").await else {
                 return false;

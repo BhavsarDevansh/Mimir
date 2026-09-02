@@ -34,3 +34,9 @@ These tests verify the **real** `LlmClient` HTTP layer: request serialisation, r
 | `test_connection_failure` | no server on `127.0.0.1:1` | `chat()` | returns `Network` or `RetryExhausted` |
 
 Security: wiremock binds only to `127.0.0.1`; no API keys are present in test code.
+
+## Connector Test Waits (issue #532)
+
+Connector integration tests avoid fixed wall-clock waits. Where the mock machinery exposes a deterministic event, they await it directly: `MockSyncRecorder::wait_for_completed` observes the RAII guard that records every sync return (including failures and cancellation), while supervisor and OAuth tests await existing readiness, drop, or socket-accept events.
+
+When a test must observe a knowledge-graph or supervisor state that has no event API, it uses the shared bounded `wait_until_some` / `wait_for_async` helpers. The helpers poll at 10 ms, fail with a descriptive timeout, and return the first observed value so tests do not duplicate deadline loops.

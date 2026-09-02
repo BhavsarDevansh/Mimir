@@ -133,18 +133,16 @@ async fn supervisor_round_trips_and_persists_cursor() {
     assert_eq!(supervisor.restore().await.unwrap(), 1);
 
     // The runner's first cycle runs immediately and persists the cursor.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
-    loop {
-        let row = kg.get_connector(row.id).await.unwrap().unwrap();
-        if row.sync_cursor.as_deref() == Some("sup-token-1") {
-            break;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "sync-token cursor never persisted"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    wait_until_some(
+        || async {
+            kg.get_connector(row.id)
+                .await
+                .unwrap()
+                .filter(|row| row.sync_cursor.as_deref() == Some("sup-token-1"))
+        },
+        Duration::from_secs(8),
+    )
+    .await;
 
     supervisor.shutdown().await;
     drop(shutdown_tx);

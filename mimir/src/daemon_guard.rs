@@ -14,6 +14,7 @@ use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
 use thiserror::Error;
+use tokio::time::timeout;
 
 use crate::transport::DaemonTransport;
 
@@ -237,11 +238,18 @@ impl DaemonGuard {
         let start = Instant::now();
         let mut delay = (self.start_timeout / 50).max(MIN_START_POLL_DELAY);
 
-        while start.elapsed() < self.start_timeout {
-            if self.probe.check(transport).await {
-                return Ok(());
+        while let Some(remaining) = self.start_timeout.checked_sub(start.elapsed()) {
+            if remaining.is_zero() {
+                break;
             }
-            tokio::time::sleep(delay).await;
+
+            match timeout(remaining, self.probe.check(transport)).await {
+                Ok(true) => return Ok(()),
+                Ok(false) => {}
+                Err(_) => return Err(DaemonGuardError::StartTimeout),
+            }
+
+            tokio::time::sleep(delay.min(remaining)).await;
             delay = (delay * 2).min(Duration::from_secs(1));
         }
 
@@ -314,6 +322,29 @@ mod tests {
         }
     }
 
+    struct SlowProbe {
+        completed_fast_probe: std::sync::atomic::AtomicBool,
+    }
+
+    impl Probe for SlowProbe {
+        fn check<'a>(
+            &'a self,
+            _transport: &'a DaemonTransport,
+        ) -> Pin<Box<dyn Future<Output = bool> + Send + 'a>> {
+            if self
+                .completed_fast_probe
+                .swap(false, std::sync::atomic::Ordering::Relaxed)
+            {
+                Box::pin(async { false })
+            } else {
+                Box::pin(async {
+                    tokio::time::sleep(Duration::from_millis(150)).await;
+                    false
+                })
+            }
+        }
+    }
+
     fn mock_guard(probe_results: Vec<bool>, prompt: &str, spawn_ok: bool) -> DaemonGuard {
         mock_guard_with_timeout(probe_results, prompt, spawn_ok, DEFAULT_START_TIMEOUT)
     }
@@ -333,6 +364,21 @@ mod tests {
             }),
             process_spawner: Box::new(MockProcessSpawner {
                 should_succeed: spawn_ok,
+            }),
+            start_timeout,
+        }
+    }
+
+    fn slow_probe_guard(start_timeout: Duration) -> DaemonGuard {
+        DaemonGuard {
+            probe: Box::new(SlowProbe {
+                completed_fast_probe: std::sync::atomic::AtomicBool::new(true),
+            }),
+            prompt_reader: Box::new(MockPromptReader {
+                response: "y\n".to_string(),
+            }),
+            process_spawner: Box::new(MockProcessSpawner {
+                should_succeed: true,
             }),
             start_timeout,
         }
@@ -472,6 +518,23 @@ mod tests {
         assert!(
             started.elapsed() < Duration::from_secs(1),
             "the injectable start timeout should not use the 10 s production default"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_start_timeout_caps_slow_probe() {
+        let guard = slow_probe_guard(Duration::from_millis(20));
+        let mut tried = false;
+        let transport = DaemonTransport::Tcp("http://127.0.0.1:1".to_string());
+
+        let started = Instant::now();
+        let result = guard.ensure_running(&transport, &mut tried).await;
+
+        assert!(matches!(result, Err(DaemonGuardError::StartTimeout)));
+        assert!(tried);
+        assert!(
+            started.elapsed() < Duration::from_millis(100),
+            "the start timeout must cap a slow probe, not wait for it to finish"
         );
     }
 

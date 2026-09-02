@@ -65,12 +65,17 @@ Unit tests in `mimir/src/daemon_guard.rs` cover:
 
 | Test | Scenario |
 |------|----------|
+| `daemon_command_strips_connector_secrets_from_child_env` | The spawned daemon command removes connector password and token environment variables. |
 | `test_already_running` | Daemon is up on first probe; returns `Ok(())` without prompting or spawning. |
 | `test_prompt_yes_spawns_and_polls` | Daemon is down; user types `y`; mock spawn succeeds; poll eventually succeeds. |
+| `test_http_probe_success` | A live TCP health endpoint reports success. |
+| `test_http_probe_failure` | An unreachable TCP endpoint reports failure. |
+| `test_unix_probe_connects_to_live_socket_and_rejects_stale` | A live Unix socket reports success; a stale socket file reports failure. |
 | `test_prompt_no` | Daemon is down; user types `n`; returns `Prompt` error. |
 | `test_prompt_eof` | Daemon is down; stdin is empty/EOF; returns `Prompt` error. |
 | `test_spawn_failure` | User types `y`; mock spawn fails; returns `Spawn` error. |
 | `test_start_timeout` | User types `y`; mock spawn succeeds; a 100 ms injected start budget expires in under 1 s and returns `StartTimeout`. |
+| `test_start_timeout_caps_slow_probe` | A slow probe is cut off by the injected start budget rather than delaying expiry until the probe finishes. |
 | `test_already_tried_skips_prompt` | `already_tried` is `true` on entry; skips prompt and returns `StartTimeout`. |
 
 Additionally, `mimir/tests/cli_tests.rs` contains binary-level integration tests that verify the daemon guard fires when the server is not running.

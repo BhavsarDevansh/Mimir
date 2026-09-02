@@ -83,7 +83,7 @@ pub async fn create_entity(
 
 /// Maximum aliases per statement. Each row binds twice, staying within the
 /// conservative 999-parameter limit supported by older SQLite builds.
-const ALIAS_INSERT_BATCH_SIZE: usize = 500;
+const ALIAS_INSERT_BATCH_SIZE: usize = 499;
 
 /// Build idempotent multi-row inserts for caller-supplied aliases.
 fn alias_insert_builders(
@@ -415,6 +415,7 @@ mod tests {
 
     #[test]
     fn alias_insert_stays_within_sqlite_bind_limit() {
+        const { assert!(ALIAS_INSERT_BATCH_SIZE * 2 <= 999) }
         let alias_names: Vec<String> = (0..ALIAS_INSERT_BATCH_SIZE + 1)
             .map(|index| format!("Alias {index}"))
             .collect();

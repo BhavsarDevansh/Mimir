@@ -14,6 +14,10 @@ pub use tower::ServiceExt;
 /// Assert that a prompt or memory view carries a current UTC temporal anchor.
 #[allow(dead_code)]
 pub fn assert_current_now_stamp(content: &str) {
+    assert!(
+        content.starts_with("Now: "),
+        "memory-bearing composition must begin with the Now stamp: {content}"
+    );
     let index = content
         .find("Now: ")
         .expect("memory context carries a Now stamp");

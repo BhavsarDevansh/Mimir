@@ -8,7 +8,7 @@ use crate::models::fact::FactStatus;
 use crate::models::memory::{MemorySchema, RankedFact};
 
 /// Render the request-local temporal anchor for the LLM-facing memory block.
-pub fn now_line(now: DateTime<Utc>) -> String {
+pub(super) fn now_line(now: DateTime<Utc>) -> String {
     format!(
         "Now: {} ({})",
         now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -16,29 +16,34 @@ pub fn now_line(now: DateTime<Utc>) -> String {
     )
 }
 
-/// Prepend the temporal anchor unless one is already present.
-pub fn prepend_now_line(memory: &str, now: DateTime<Utc>) -> String {
-    if memory.trim_start().starts_with("Now: ") {
-        memory.to_string()
-    } else if memory.is_empty() {
-        now_line(now)
-    } else {
-        format!("{}\n\n{}", now_line(now), memory)
+/// Ensure a prompt starts with the current temporal anchor, replacing only a
+/// previously-rendered leading anchor and preserving all other content.
+pub fn refresh_now_line(memory: &str, now: DateTime<Utc>) -> String {
+    let stamp = now_line(now);
+    match now_anchor_range(memory) {
+        Some((start, end)) => format!("{}{}{}", &memory[..start], stamp, &memory[end..]),
+        None if memory.is_empty() => stamp,
+        None => format!("{}\n\n{}", stamp, memory),
     }
 }
 
-/// Replace a previously-rendered temporal anchor, adding one to legacy prompts.
-pub fn refresh_now_line(memory: &str, now: DateTime<Utc>) -> String {
-    let stamp = now_line(now);
-    match memory.find("Now: ") {
-        Some(start) => {
-            let end = memory[start..]
-                .find(')')
-                .map_or(memory.len(), |offset| start + offset + 1);
-            format!("{}{}{}", &memory[..start], stamp, &memory[end..])
-        }
-        None => prepend_now_line(memory, now),
+fn now_anchor_range(memory: &str) -> Option<(usize, usize)> {
+    if !memory.starts_with("Now: ") {
+        return None;
     }
+
+    let end = memory.find('\n').map_or(memory.len(), |offset| offset);
+    let content = memory[..end].strip_prefix("Now: ")?;
+    let (timestamp, prose) = content.split_once(" (")?;
+    let timestamp = DateTime::parse_from_rfc3339(timestamp).ok()?;
+    let prose = prose.strip_suffix(')')?;
+
+    let expected_prose = timestamp
+        .with_timezone(&Utc)
+        .format("%A %-d %B %Y")
+        .to_string();
+
+    (prose == expected_prose).then_some((0, end))
 }
 
 /// Render a MemorySchema into concise plain text.

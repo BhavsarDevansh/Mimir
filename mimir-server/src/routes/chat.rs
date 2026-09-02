@@ -2,6 +2,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
+
 use axum::{
     Json,
     extract::State,
@@ -102,10 +104,9 @@ pub(crate) async fn build_memory_context(state: &Arc<AppState>) -> String {
         String::new()
     };
     if upcoming.is_empty() {
-        mimir_knowledge::queries::memory::prepend_now_line(&condensed, state.knowledge_graph.now())
+        condensed
     } else {
-        let memory = format!("{}\n\n{}", condensed, upcoming);
-        mimir_knowledge::queries::memory::prepend_now_line(&memory, state.knowledge_graph.now())
+        format!("{}\n\n{}", condensed, upcoming)
     }
 }
 
@@ -118,17 +119,24 @@ pub(crate) async fn build_system_prompt(
     state: &Arc<AppState>,
     personality: &mimir_core::personality::Personality,
     memory: &str,
+    now: DateTime<Utc>,
 ) -> String {
     let catalogue = build_catalogue(&state.knowledge_graph).await;
-    if catalogue.is_empty() {
+    let temporal_anchor = mimir_knowledge::queries::memory::refresh_now_line("", now);
+    let personality_prompt = format!(
+        "{}\n\n{}",
+        temporal_anchor,
         personality.system_prompt(memory)
+    );
+
+    if catalogue.is_empty() {
+        personality_prompt
     } else {
         format!(
             "{}
 
 {}",
-            personality.system_prompt(memory),
-            catalogue
+            personality_prompt, catalogue
         )
     }
 }
@@ -151,6 +159,7 @@ async fn resolve_chat_state(
     ),
     axum::response::Response,
 > {
+    let now = state.knowledge_graph.now();
     let memory = build_memory_context(state).await;
     let cfg = state.config.snapshot().await;
 
@@ -188,7 +197,7 @@ async fn resolve_chat_state(
                 Err(e) => return Err(error::context_error(e)),
             },
             None => {
-                let system_prompt = build_system_prompt(state, &personality, &memory).await;
+                let system_prompt = build_system_prompt(state, &personality, &memory, now).await;
                 state
                     .context_manager
                     .create_session(system_prompt)
@@ -199,7 +208,7 @@ async fn resolve_chat_state(
     };
 
     if incognito {
-        let system_prompt = build_system_prompt(state, &personality, &memory).await;
+        let system_prompt = build_system_prompt(state, &personality, &memory, now).await;
         let messages = vec![
             mimir_core::llm::types::Message::system(&system_prompt),
             mimir_core::llm::types::Message::user(&req.message),
@@ -248,10 +257,8 @@ async fn resolve_chat_state(
             .await
             .map_err(error::context_error)?;
         if let Some(system) = messages.first_mut() {
-            system.content = mimir_knowledge::queries::memory::refresh_now_line(
-                &system.content,
-                state.knowledge_graph.now(),
-            );
+            system.content =
+                mimir_knowledge::queries::memory::refresh_now_line(&system.content, now);
         }
 
         Ok((session_id, llm, messages, incognito, Some(permit)))

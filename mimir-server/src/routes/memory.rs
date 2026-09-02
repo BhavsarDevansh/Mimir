@@ -43,7 +43,7 @@ pub async fn memory_handler(State(state): State<Arc<AppState>>) -> Result<String
         format!("{}\n\n{}", condensed, upcoming)
     };
 
-    Ok(mimir_knowledge::queries::memory::prepend_now_line(
+    Ok(mimir_knowledge::queries::memory::refresh_now_line(
         &combined,
         state.knowledge_graph.now(),
     ))

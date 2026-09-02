@@ -177,17 +177,29 @@ fn now_line_uses_utc_and_plain_english_date() {
 }
 
 #[test]
-fn prepend_now_line_adds_exactly_one_leading_stamp() {
+fn refresh_now_line_prepends_exactly_one_leading_stamp() {
     let now = chrono::Utc
         .with_ymd_and_hms(2026, 8, 23, 21, 30, 0)
         .unwrap();
     let expected = "Now: 2026-08-23T21:30:00Z (Sunday 23 August 2026)\n\nMemory facts.";
 
     assert_eq!(
-        super::render::prepend_now_line("Memory facts.", now),
+        super::render::refresh_now_line("Memory facts.", now),
         expected
     );
-    assert_eq!(super::render::prepend_now_line(expected, now), expected);
+    assert_eq!(super::render::refresh_now_line(expected, now), expected);
+}
+
+#[test]
+fn refresh_now_line_ignores_inline_timestamps() {
+    let now = chrono::Utc.with_ymd_and_hms(2026, 8, 24, 6, 15, 0).unwrap();
+    let original =
+        "Core facts:Memory says Now: 2026-08-23T21:30:00Z (Sunday 23 August 2026) elsewhere.";
+
+    assert_eq!(
+        super::render::refresh_now_line(original, now),
+        format!("Now: 2026-08-24T06:15:00Z (Monday 24 August 2026)\n\n{original}")
+    );
 }
 
 #[test]
@@ -196,22 +208,10 @@ fn refresh_now_line_replaces_existing_stamp_without_duplicating_it() {
         .with_ymd_and_hms(2026, 8, 23, 21, 30, 0)
         .unwrap();
     let second = chrono::Utc.with_ymd_and_hms(2026, 8, 24, 6, 15, 0).unwrap();
-    let original = super::render::prepend_now_line("Memory facts.", first);
+    let original = super::render::refresh_now_line("Memory facts.", first);
     let expected = "Now: 2026-08-24T06:15:00Z (Monday 24 August 2026)\n\nMemory facts.";
 
     assert_eq!(super::render::refresh_now_line(&original, second), expected);
-}
-
-#[test]
-fn refresh_now_line_replaces_inline_stamp_without_eating_memory() {
-    let second = chrono::Utc.with_ymd_and_hms(2026, 8, 24, 6, 15, 0).unwrap();
-    let original =
-        "Core facts:Now: 2026-08-23T21:30:00Z (Sunday 23 August 2026)User enjoys hiking.";
-
-    assert_eq!(
-        super::render::refresh_now_line(original, second),
-        "Core facts:Now: 2026-08-24T06:15:00Z (Monday 24 August 2026)User enjoys hiking."
-    );
 }
 
 #[test]

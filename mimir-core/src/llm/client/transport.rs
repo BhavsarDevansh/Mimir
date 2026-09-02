@@ -178,16 +178,16 @@ impl LlmClient {
                 Err(e) => {
                     attempt += 1;
 
+                    if !Self::is_transient(&e) {
+                        return Err(e);
+                    }
+
                     if attempt >= u32::from(self.retry_config.max_attempts) {
                         error!(attempts = attempt, "retry exhausted");
                         return Err(LlmError::RetryExhausted {
                             attempts: attempt,
                             last_error: Box::new(e),
                         });
-                    }
-
-                    if !Self::is_transient(&e) {
-                        return Err(e);
                     }
 
                     let backoff = self.calculate_backoff(attempt);

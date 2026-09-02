@@ -80,7 +80,7 @@ The underlying `reqwest::Client` uses a 30-second **connect timeout** rather tha
 
 ### `async fn new_with_retry_config(config: LlmConfig, retry_config: RetryConfig) -> Result<Self, LlmError>`
 
-Constructs a client with the same runtime requirements and connection timeout as `new`, but overrides the retry schedule for direct calls and for every worker in the client's pool. `RetryConfig` contains `max_attempts` (the total attempt count, including the initial attempt), `base_backoff`, and `max_backoff`; `RetryConfig::default()` preserves the production schedule of four attempts, a 200 ms base, and a 10-second ceiling.
+Constructs a client with the same runtime requirements and connection timeout as `new`, but overrides the retry schedule for direct calls and for every worker in the client's pool. `RetryConfig` contains `max_attempts` (the total attempt count, including the initial attempt), `base_backoff`, and `max_backoff`; the constructor rejects `max_attempts` of zero because the total cannot be less than the initial attempt. `RetryConfig::default()` preserves the production schedule of four attempts, a 200 ms base, and a 10-second ceiling.
 
 `new_direct(config, retry_config)` (used internally by pool workers) is also fallible. The `reqwest::Client` is built **before** the worker pool spawns, and each worker's client is built up front inside `LlmWorkerPool::new`; the first build failure propagates as `LlmError::ClientBuild` so the pool can never start in a zero-live-worker state.
 

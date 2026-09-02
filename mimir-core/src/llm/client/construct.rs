@@ -59,6 +59,7 @@ impl LlmClient {
         config: LlmConfig,
         retry_config: RetryConfig,
     ) -> Result<Self, LlmError> {
+        let retry_config = retry_config.validated().map_err(LlmError::ClientBuild)?;
         let client = Self::build_reqwest_client()?;
         Ok(Self {
             client,

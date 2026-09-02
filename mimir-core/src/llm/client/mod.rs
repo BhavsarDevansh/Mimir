@@ -48,8 +48,11 @@ pub struct LlmClient {
 /// historical three-retry schedule and 10-second backoff ceiling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RetryConfig {
+    /// Total attempts, including the initial call. Must be greater than zero.
     pub max_attempts: u8,
+    /// Delay before the first retry, before exponential growth.
     pub base_backoff: Duration,
+    /// Upper bound applied to every calculated retry delay.
     pub max_backoff: Duration,
 }
 
@@ -60,6 +63,15 @@ impl Default for RetryConfig {
             base_backoff: Duration::from_millis(BASE_BACKOFF_MS),
             max_backoff: Duration::from_millis(MAX_BACKOFF_MS),
         }
+    }
+}
+
+impl RetryConfig {
+    fn validated(self) -> Result<Self, String> {
+        if self.max_attempts == 0 {
+            return Err("RetryConfig.max_attempts must be > 0".to_string());
+        }
+        Ok(self)
     }
 }
 

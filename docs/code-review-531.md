@@ -5,6 +5,8 @@
 | Dimension | Finding | Severity | Resolution |
 |---|---|---|---|
 | Correctness | The LLM retry test assumed the default four-attempt budget while it used the proposed fast schedule. | High | Updated the persistent-failure test to assert exactly two attempts and preserve the upstream 503 error. |
+| Correctness | A zero-value `RetryConfig.max_attempts` would bypass the exhaustion check and retry indefinitely. | High | Added TDD constructor validation and documented that the total attempt count must be positive. |
+| Correctness | A one-attempt budget classified non-retryable failures as exhausted retries because the exhaustion check preceded transient classification. | High | Moved transient classification before exhaustion and added immediate-return coverage. |
 | Performance | Retry tests slept through 400/800/1600 ms LLM backoff and two one-second connector `Retry-After` waits. | High | Added an injectable `RetryConfig` to `LlmClient`, propagated it to pooled workers, and bounded connector `Retry-After` handling to the injected strategy cap. |
 | Correctness | The backoff helper mixed duration and integer-millisecond conversions, adding avoidable overflow handling and truncation risk. | Medium | Changed backoff calculation to saturating `Duration` arithmetic and sleep directly with the resulting duration. |
 | Public API surface | A new retry configuration and a changed worker-pool constructor needed explicit contracts. | Medium | Documented `RetryConfig`, the total-attempt semantics, pool propagation, direct constructor signature, and production defaults in the LLM client and worker-pool guides. |

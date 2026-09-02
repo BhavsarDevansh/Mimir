@@ -249,6 +249,66 @@ fn test_calculate_backoff_capped() {
 }
 
 #[tokio::test]
+async fn test_rejects_zero_max_attempts() {
+    let config = LlmConfig {
+        endpoint: "https://api.openai.com/v1".to_string(),
+        api_key: "test".to_string(),
+        model: "gpt-4o".to_string(),
+        max_tokens: Some(10),
+        temperature: 0.0,
+    };
+    let retry_config = RetryConfig {
+        max_attempts: 0,
+        base_backoff: Duration::ZERO,
+        max_backoff: Duration::ZERO,
+    };
+
+    let result = LlmClient::new_with_retry_config(config.clone(), retry_config).await;
+    assert!(
+        matches!(result, Err(LlmError::ClientBuild(ref message)) if message.contains("max_attempts")),
+        "pooled construction must reject zero total attempts, got {result:?}"
+    );
+
+    let result = LlmClient::new_direct(config, retry_config);
+    assert!(
+        matches!(result, Err(LlmError::ClientBuild(ref message)) if message.contains("max_attempts")),
+        "direct construction must reject zero total attempts, got {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_retry_with_backoff_returns_non_retryable_error_immediately() {
+    let config = LlmConfig {
+        endpoint: "https://api.openai.com/v1".to_string(),
+        api_key: "test".to_string(),
+        model: "gpt-4o".to_string(),
+        max_tokens: Some(10),
+        temperature: 0.0,
+    };
+    let client = LlmClient::new_direct(
+        config,
+        RetryConfig {
+            max_attempts: 1,
+            base_backoff: Duration::ZERO,
+            max_backoff: Duration::ZERO,
+        },
+    )
+    .unwrap();
+
+    let result = client
+        .retry_with_backoff(|| async {
+            let parse_error = serde_json::from_str::<serde_json::Value>("bad response")
+                .expect_err("malformed JSON must fail parsing");
+            Err::<(), _>(LlmError::Parse(parse_error))
+        })
+        .await;
+    assert!(
+        matches!(result, Err(LlmError::Parse(_))),
+        "a non-retryable failure must not become RetryExhausted, got {result:?}"
+    );
+}
+
+#[tokio::test]
 async fn test_retry_exhausted_on_persistent_failure() {
     // A deterministic transient failure: a local server that answers every
     // attempt with `503`, so the retry loop must run to exhaustion and the

@@ -79,8 +79,8 @@ async fn get(
     })
 }
 
-/// A fixed 1 ms backoff so tests run in milliseconds unless a server
-/// `Retry-After` drives a longer wait.
+/// A 1–10 ms exponential backoff so tests run in milliseconds while still
+/// bounding server `Retry-After` hints to the strategy maximum.
 fn fast_strategy() -> BackoffStrategy {
     BackoffStrategy::Exponential {
         base: Duration::from_millis(1),

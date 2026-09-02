@@ -62,7 +62,13 @@ async fn test_memory_returns_condensed_content() {
         .await
         .unwrap();
     let text = String::from_utf8(body_bytes.to_vec()).unwrap();
+    assert_current_now_stamp(&text);
     assert!(text.contains("Test memory content from KG."));
+    assert_eq!(
+        state.knowledge_graph.get_condensed_memory().await.unwrap(),
+        Some("Test memory content from KG.".to_string()),
+        "the request-local Now stamp must not be written into the condensation cache"
+    );
 }
 #[tokio::test]
 async fn test_memory_refresh_non_loopback_rejected() {

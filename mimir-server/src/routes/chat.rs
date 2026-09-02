@@ -102,14 +102,10 @@ pub(crate) async fn build_memory_context(state: &Arc<AppState>) -> String {
         String::new()
     };
     if upcoming.is_empty() {
-        condensed
+        mimir_knowledge::queries::memory::prepend_now_line(&condensed, state.knowledge_graph.now())
     } else {
-        format!(
-            "{}
-
-{}",
-            condensed, upcoming
-        )
+        let memory = format!("{}\n\n{}", condensed, upcoming);
+        mimir_knowledge::queries::memory::prepend_now_line(&memory, state.knowledge_graph.now())
     }
 }
 
@@ -246,11 +242,17 @@ async fn resolve_chat_state(
             .await
             .map_err(error::context_error)?;
 
-        let messages = state
+        let mut messages = state
             .context_manager
             .export_messages(session_id)
             .await
             .map_err(error::context_error)?;
+        if let Some(system) = messages.first_mut() {
+            system.content = mimir_knowledge::queries::memory::refresh_now_line(
+                &system.content,
+                state.knowledge_graph.now(),
+            );
+        }
 
         Ok((session_id, llm, messages, incognito, Some(permit)))
     }

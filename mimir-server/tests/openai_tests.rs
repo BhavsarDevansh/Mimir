@@ -123,6 +123,13 @@ async fn test_v1_chat_blocking_basic_shape() {
     );
     let (status, _headers, value) = post_v1_chat(&app, &body).await;
     assert_eq!(status, StatusCode::OK);
+    let calls = mock.chat_calls();
+    assert!(!calls.is_empty(), "expected one LLM chat call");
+    let system = calls[0]
+        .iter()
+        .find(|m| m.role == "system")
+        .expect("system prompt present");
+    assert_current_now_stamp(&system.content);
     let response: OpenAiChatResponse = serde_json::from_value(value).unwrap();
     assert!(response.id.starts_with("chatcmpl-"), "id: {}", response.id);
     assert_eq!(response.object, "chat.completion");

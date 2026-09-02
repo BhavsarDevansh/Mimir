@@ -7,6 +7,40 @@ use crate::KnowledgeError;
 use crate::models::fact::FactStatus;
 use crate::models::memory::{MemorySchema, RankedFact};
 
+/// Render the request-local temporal anchor for the LLM-facing memory block.
+pub fn now_line(now: DateTime<Utc>) -> String {
+    format!(
+        "Now: {} ({})",
+        now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        now.format("%A %-d %B %Y")
+    )
+}
+
+/// Prepend the temporal anchor unless one is already present.
+pub fn prepend_now_line(memory: &str, now: DateTime<Utc>) -> String {
+    if memory.trim_start().starts_with("Now: ") {
+        memory.to_string()
+    } else if memory.is_empty() {
+        now_line(now)
+    } else {
+        format!("{}\n\n{}", now_line(now), memory)
+    }
+}
+
+/// Replace a previously-rendered temporal anchor, adding one to legacy prompts.
+pub fn refresh_now_line(memory: &str, now: DateTime<Utc>) -> String {
+    let stamp = now_line(now);
+    match memory.find("Now: ") {
+        Some(start) => {
+            let end = memory[start..]
+                .find(')')
+                .map_or(memory.len(), |offset| start + offset + 1);
+            format!("{}{}{}", &memory[..start], stamp, &memory[end..])
+        }
+        None => prepend_now_line(memory, now),
+    }
+}
+
 /// Render a MemorySchema into concise plain text.
 /// Identity facts are rendered first without a header; other buckets get headers.
 pub fn render_memory_schema(schema: &MemorySchema) -> String {

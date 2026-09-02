@@ -432,6 +432,14 @@ async fn resolve_openai_turn(
         }
     };
 
+    let mut conversation = conversation;
+    if let Some(system) = conversation.first_mut() {
+        system.content = mimir_knowledge::queries::memory::refresh_now_line(
+            &system.content,
+            state.knowledge_graph.now(),
+        );
+    }
+
     Ok(OpenAiTurn {
         state: Arc::clone(state),
         session_id,

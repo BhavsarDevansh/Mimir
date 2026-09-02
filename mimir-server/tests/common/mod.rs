@@ -11,6 +11,31 @@ pub use axum::http::{Request, StatusCode};
 pub use dashmap::DashMap;
 pub use tower::ServiceExt;
 
+/// Assert that a prompt or memory view carries a current UTC temporal anchor.
+#[allow(dead_code)]
+pub fn assert_current_now_stamp(content: &str) {
+    let index = content
+        .find("Now: ")
+        .expect("memory context carries a Now stamp");
+    let stamp = &content[index + "Now: ".len()..];
+    let timestamp = stamp
+        .split_whitespace()
+        .next()
+        .expect("Now carries a timestamp");
+    let parsed = chrono::DateTime::parse_from_rfc3339(timestamp)
+        .expect("Now timestamp is valid RFC 3339")
+        .with_timezone(&chrono::Utc);
+    let delta = (parsed - chrono::Utc::now()).abs();
+    assert!(
+        delta <= chrono::Duration::seconds(5),
+        "Now timestamp must be current: {content}"
+    );
+    assert!(
+        stamp.contains('(') && stamp.contains(')'),
+        "Now carries weekday/date prose: {content}"
+    );
+}
+
 pub use mimir_api_types::{ChatResponse, StatusResponse};
 pub use mimir_core::{
     config::{Config, ReloadableConfig},

@@ -12,7 +12,9 @@ mod tests;
 
 pub use build::build_memory_schema;
 pub use build::build_memory_schema_with_opts;
-pub use render::{render_memory_schema, render_upcoming_section};
+pub use render::{
+    now_line, prepend_now_line, refresh_now_line, render_memory_schema, render_upcoming_section,
+};
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct BuildMemoryOptions {

@@ -73,7 +73,7 @@ The scheduler ensures condensation only runs during LLM downtime so it never com
 
 The memory-bearing system prompt is composed at session creation for non-incognito sessions — after the preset tone text and shared operating directives — and reused for the session's lifetime, preserving the LLM's prefix cache; incognito requests build a fresh prompt per request. The block is framed as a curated subset rather than an exhaustive picture ("Core facts about the user (condensed subset — not a complete picture; treat as starting context, not exhaustive)"), signalling to the LLM that it should use the `retrieve_context` tool if it needs more.
 
-The block is frozen per session: non-incognito sessions reuse the system prompt captured at session creation, which preserves the LLM's prefix cache; incognito requests build a fresh prompt.
+The core block is frozen per session: non-incognito sessions reuse the system prompt captured at session creation, which preserves the LLM's prefix cache; incognito requests build a fresh prompt. The one exception is the request-local temporal anchor at the start of the composed memory block: `Now: <RFC 3339 UTC> (<weekday> <date>)` is refreshed for every turn, while the condensed facts and upcoming section remain frozen.
 
 ## Configuration
 

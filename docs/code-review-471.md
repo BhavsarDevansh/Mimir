@@ -12,8 +12,11 @@
 | DRY compliance | ISO bounds formatting and length estimation could drift. | Medium | Added one renderer-owned bounds formatter and derived the budget estimate from it. |
 | Type consistency | `RankedFact` lacked the temporal fields needed by the renderer. | Medium | Added typed `Option<DateTime<Utc>>` bounds and propagated them from the SQL row. |
 | Public API surface | `RankedFact` and search fact output gained required fields. | Medium | Documented the new fields and updated tests, fixtures, and bench constructors. |
+| Public API surface | `FactSummary` temporal fields lacked doc comments. | Low | Added concise UTC-bound documentation to the public search result type. |
 | Documentation | The memory, KG-tool, and retrieval guides did not state the ISO UTC bounds contract. | Low | Updated the technical and wiki documentation with examples and the shared temporal contract. |
 | Test coverage | Existing tests only pinned prose with no temporal inputs. | High | Added unit, integration, and retrieval tests for `valid_from` only, both bounds, neither, search output, upcoming output, and budget propagation. |
+| Test coverage | The `valid_until`-only renderer path was untested. | Low | Added an ISO UTC unit test for a fact with only an end bound. |
+| DRY compliance | Conversation timestamps repeated the RFC 3339-to-UTC parsing logic. | Low | Reused the retrieval fact timestamp parser for conversation timestamps. |
 | Guideline compliance | The change could have introduced unsafe code or global environment mutation. | None | No action required; the change contains neither. |
 | Versioning | The workspace version needed a patch bump for the backwards-compatible rendering and tool-output addition. | Low | Bumped the workspace version from `0.157.0` to `0.157.1`. |
 | Test hygiene | Two unrelated Obsidian import tests failed during the workspace run. | Low | Filed #591 for the unrelated em-dash and dry-run count regressions. |

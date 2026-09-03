@@ -233,6 +233,35 @@ fn render_fact_line_emits_both_bounds_as_iso_utc() {
 }
 
 #[test]
+fn render_fact_line_emits_valid_until_only_as_iso_utc() {
+    let fact = RankedFact {
+        fact_id: 1,
+        subject_name: "Devansh".to_string(),
+        relationship_type: "has_appointment".to_string(),
+        object_display: "Dentist".to_string(),
+        valid_from: None,
+        valid_until: chrono::Utc
+            .with_ymd_and_hms(2025, 7, 20, 0, 0, 0)
+            .unwrap()
+            .into(),
+        confidence: 0.5,
+        score: 1.0,
+        temporal_boost: 1.0,
+        memory_weight: 1.0,
+        priority_boost: 1.0,
+        centrality_boost: 1.0,
+        category_ids: vec![],
+        bucket: MemoryBucket::Upcoming,
+        char_estimate: 30,
+    };
+
+    assert_eq!(
+        render_fact_line(&fact),
+        "Devansh has appointment Dentist (→ 2025-07-20T00:00:00Z)"
+    );
+}
+
+#[test]
 fn render_fact_line_omits_bounds_when_both_are_absent() {
     let fact = RankedFact {
         fact_id: 1,

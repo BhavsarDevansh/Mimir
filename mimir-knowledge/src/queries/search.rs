@@ -22,7 +22,9 @@ pub struct FactSummary {
     pub predicate: String,
     pub object_name: Option<String>,
     pub object_literal: Option<String>,
+    /// UTC timestamp from which the fact became true.
     pub valid_from: Option<DateTime<Utc>>,
+    /// UTC timestamp at which the fact stopped being true, if known.
     pub valid_until: Option<DateTime<Utc>>,
     pub confidence: f32,
 }

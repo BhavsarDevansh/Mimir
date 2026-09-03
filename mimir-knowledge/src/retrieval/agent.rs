@@ -14,12 +14,13 @@ use crate::retrieval::types::{
     ConversationSnippet, RetrievedContext, RetrievedEntity, RetrievedFact, RetrievedRelation,
 };
 use crate::tools::{KgQueryTool, KgRelatedTool, KgSearchTool};
+use chrono::{DateTime, Utc};
 
 /// Parse an RFC 3339 JSON string as a UTC timestamp.
-fn parse_utc(value: &serde_json::Value) -> Option<chrono::DateTime<chrono::Utc>> {
-    chrono::DateTime::parse_from_rfc3339(value.as_str()?)
+fn parse_utc(value: &Value) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value.as_str()?)
         .ok()
-        .map(|dt| dt.with_timezone(&chrono::Utc))
+        .map(|dt| dt.with_timezone(&Utc))
 }
 
 /// Internal agent that investigates the knowledge graph and conversation history.
@@ -473,11 +474,7 @@ impl RetrievalAgent {
                     snippet: text.to_string(),
                     created_at: s
                         .get("created_at")
-                        .and_then(|v| {
-                            chrono::DateTime::parse_from_rfc3339(v.as_str()?)
-                                .ok()
-                                .map(|dt| dt.with_timezone(&chrono::Utc))
-                        })
+                        .and_then(parse_utc)
                         .unwrap_or_else(chrono::Utc::now),
                 },
                 _ => continue,

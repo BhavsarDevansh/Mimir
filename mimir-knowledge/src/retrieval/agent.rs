@@ -15,6 +15,13 @@ use crate::retrieval::types::{
 };
 use crate::tools::{KgQueryTool, KgRelatedTool, KgSearchTool};
 
+/// Parse an RFC 3339 JSON string as a UTC timestamp.
+fn parse_utc(value: &serde_json::Value) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(value.as_str()?)
+        .ok()
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+}
+
 /// Internal agent that investigates the knowledge graph and conversation history.
 ///
 /// Lives for a single retrieval task.  Maintains its own ephemeral message history
@@ -264,10 +271,34 @@ impl RetrievalAgent {
         match tool_name {
             "kg_query" => self.accumulate_kg_query(result, context),
             "kg_related" => self.accumulate_kg_related(result, context),
-            "kg_search" => self.accumulate_kg_search(result, context),
+            "kg_search" => Self::accumulate_kg_search(result, context),
             "search_conversation_history" => self.accumulate_conversation(result, context),
             _ => {}
         }
+    }
+
+    /// Parse one KG fact into the retrieval context's stable temporal type.
+    fn parse_retrieved_fact(f: &Value) -> Option<RetrievedFact> {
+        Some(RetrievedFact {
+            predicate: f.get("predicate")?.as_str()?.to_string(),
+            object_name: f
+                .get("object_name")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            object_literal: f
+                .get("object_literal")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            confidence: f.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+            valid_from: f.get("valid_from").and_then(parse_utc),
+            valid_until: f.get("valid_until").and_then(parse_utc),
+            status: f
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Active")
+                .to_string(),
+            inferred: f.get("inferred").and_then(|v| v.as_bool()).unwrap_or(false),
+        })
     }
 
     fn accumulate_kg_query(&self, result: &Value, context: &mut RetrievedContext) {
@@ -287,37 +318,7 @@ impl RetrievalAgent {
             .and_then(|v| v.as_array())
             .map(|arr| {
                 arr.iter()
-                    .filter_map(|f| {
-                        Some(RetrievedFact {
-                            predicate: f.get("predicate")?.as_str()?.to_string(),
-                            object_name: f
-                                .get("object_name")
-                                .and_then(|v| v.as_str())
-                                .map(String::from),
-                            object_literal: f
-                                .get("object_literal")
-                                .and_then(|v| v.as_str())
-                                .map(String::from),
-                            confidence: f.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.0)
-                                as f32,
-                            valid_from: f.get("valid_from").and_then(|v| {
-                                chrono::DateTime::parse_from_rfc3339(v.as_str()?)
-                                    .ok()
-                                    .map(|dt| dt.with_timezone(&chrono::Utc))
-                            }),
-                            valid_until: f.get("valid_until").and_then(|v| {
-                                chrono::DateTime::parse_from_rfc3339(v.as_str()?)
-                                    .ok()
-                                    .map(|dt| dt.with_timezone(&chrono::Utc))
-                            }),
-                            status: f
-                                .get("status")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("Active")
-                                .to_string(),
-                            inferred: f.get("inferred").and_then(|v| v.as_bool()).unwrap_or(false),
-                        })
-                    })
+                    .filter_map(Self::parse_retrieved_fact)
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
@@ -423,7 +424,7 @@ impl RetrievalAgent {
         Self::merge_entity_facts(context, root_entity, "Unknown", Vec::new());
     }
 
-    fn accumulate_kg_search(&self, result: &Value, context: &mut RetrievedContext) {
+    fn accumulate_kg_search(result: &Value, context: &mut RetrievedContext) {
         let empty_vec: Vec<Value> = Vec::new();
         let results = result
             .get("results")
@@ -447,28 +448,7 @@ impl RetrievalAgent {
                 .and_then(|v| v.as_array())
                 .map(|arr| {
                     arr.iter()
-                        .filter_map(|f| {
-                            Some(RetrievedFact {
-                                predicate: f.get("predicate")?.as_str()?.to_string(),
-                                object_name: f
-                                    .get("object_name")
-                                    .and_then(|v| v.as_str())
-                                    .map(String::from),
-                                object_literal: f
-                                    .get("object_literal")
-                                    .and_then(|v| v.as_str())
-                                    .map(String::from),
-                                confidence: f
-                                    .get("confidence")
-                                    .and_then(|v| v.as_f64())
-                                    .unwrap_or(0.0)
-                                    as f32,
-                                valid_from: None,
-                                valid_until: None,
-                                status: "Active".to_string(),
-                                inferred: false,
-                            })
-                        })
+                        .filter_map(Self::parse_retrieved_fact)
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
@@ -577,6 +557,7 @@ impl Tool for FinishRetrievalTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
 
     #[test]
     fn merge_entity_facts_upgrades_unknown_placeholder() {
@@ -629,5 +610,36 @@ mod tests {
         assert_eq!(context.entities.len(), 1);
         assert_eq!(context.entities[0].entity_type, "Person");
         assert_eq!(context.entities[0].facts, vec![fact]);
+    }
+
+    #[test]
+    fn accumulate_kg_search_preserves_temporal_bounds() {
+        let mut context = RetrievedContext::default();
+        let result = serde_json::json!({
+            "query": "appointments",
+            "results": [{
+                "entity": {"id": 1, "name": "Devansh", "entity_type": "Person"},
+                "match_score": 1.0,
+                "top_facts": [{
+                    "predicate": "has_event",
+                    "object_name": null,
+                    "object_literal": "Property Check-In",
+                    "confidence": 0.9,
+                    "valid_from": "2025-07-16T00:00:00Z",
+                    "valid_until": "2025-07-20T00:00:00Z"
+                }]
+            }]
+        });
+
+        RetrievalAgent::accumulate_kg_search(&result, &mut context);
+
+        assert_eq!(
+            context.entities[0].facts[0].valid_from,
+            Some(chrono::Utc.with_ymd_and_hms(2025, 7, 16, 0, 0, 0).unwrap())
+        );
+        assert_eq!(
+            context.entities[0].facts[0].valid_until,
+            Some(chrono::Utc.with_ymd_and_hms(2025, 7, 20, 0, 0, 0).unwrap())
+        );
     }
 }

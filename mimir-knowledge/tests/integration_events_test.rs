@@ -31,7 +31,7 @@ async fn test_event_overlay_surfaces_in_upcoming() {
             object_id: None,
             object_literal: Some("Tokyo".to_string()),
             valid_from: Some(now + chrono::Duration::days(5)),
-            valid_until: None,
+            valid_until: Some(now + chrono::Duration::days(6)),
             source_type: SourceType::UserEdit,
             connector_instance_id: None,
             connector_type: None,
@@ -66,6 +66,13 @@ async fn test_event_overlay_surfaces_in_upcoming() {
     .await
     .unwrap();
     assert!(section.contains("Tokyo"), "section was: {section}");
+    let from = (now + chrono::Duration::days(5)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let until =
+        (now + chrono::Duration::days(6)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    assert!(
+        section.contains(&format!("{from} → {until}")),
+        "section was: {section}"
+    );
 }
 
 #[tokio::test]

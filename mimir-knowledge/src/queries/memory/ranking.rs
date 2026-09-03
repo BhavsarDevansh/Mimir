@@ -4,6 +4,7 @@
 use chrono::{DateTime, Utc};
 
 use crate::models::memory::{MemoryBucket, RankedFact};
+use crate::queries::memory::render::temporal_bounds_len;
 
 /// Temporal boost for facts with a future valid_from date.
 /// boost = 10.0 / sqrt(max(days, 0.5))
@@ -29,15 +30,26 @@ pub fn bucket_from_id(bucket_id: Option<i16>) -> MemoryBucket {
 }
 
 /// Rough character estimate for a rendered fact.
-pub(super) fn estimate_chars(subject: &str, relationship: &str, object: &str) -> usize {
-    // Template: "{subject} {relationship} {object}. "
-    subject.len() + relationship.len() + object.len() + 3
+pub(super) fn estimate_chars(
+    subject: &str,
+    relationship: &str,
+    object: &str,
+    valid_from: Option<DateTime<Utc>>,
+    valid_until: Option<DateTime<Utc>>,
+) -> usize {
+    subject.len()
+        + relationship.len()
+        + object.len()
+        + 3
+        + temporal_bounds_len(valid_from, valid_until)
 }
 
 /// Truncate a fact to fit the remaining budget, appending `…`.
 /// Uses char-aware slicing to avoid panicking on multi-byte UTF-8 characters.
 pub(super) fn truncate_fact(mut fact: RankedFact, budget: usize) -> RankedFact {
-    let max_obj = budget.saturating_sub(fact.subject_name.len() + fact.relationship_type.len() + 3);
+    let bounds_len = temporal_bounds_len(fact.valid_from, fact.valid_until);
+    let max_obj = budget
+        .saturating_sub(fact.subject_name.len() + fact.relationship_type.len() + 3 + bounds_len);
     if max_obj == 0 {
         fact.object_display = "…".to_string();
     } else if fact.object_display.len() > max_obj {

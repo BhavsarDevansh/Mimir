@@ -14,7 +14,7 @@ fn upcoming_suffix_uses_calendar_days() {
     // calendar boundary so the suffix must say "in 1 day", not "today".
     let now = Utc.with_ymd_and_hms(2026, 6, 25, 23, 0, 0).unwrap();
     let when = Utc.with_ymd_and_hms(2026, 6, 26, 1, 0, 0).unwrap();
-    let line = format_upcoming_line("Ada", "is_in", Some("Paris"), None, when, now);
+    let line = format_upcoming_line("Ada", "is_in", Some("Paris"), None, when, None, now);
     assert!(line.contains("in 1 day"), "line was: {line}");
 }
 
@@ -25,7 +25,7 @@ fn upcoming_suffix_today_same_calendar_day() {
     // Same calendar day, ~1h apart -> "today" regardless of hour delta.
     let now = Utc.with_ymd_and_hms(2026, 6, 25, 10, 0, 0).unwrap();
     let when = Utc.with_ymd_and_hms(2026, 6, 25, 23, 0, 0).unwrap();
-    let line = format_upcoming_line("Ada", "is_in", Some("Paris"), None, when, now);
+    let line = format_upcoming_line("Ada", "is_in", Some("Paris"), None, when, None, now);
     assert!(line.contains("today"), "line was: {line}");
 }
 
@@ -108,6 +108,8 @@ fn render_memory_schema_basic() {
             subject_name: "Devansh".to_string(),
             relationship_type: "works_as".to_string(),
             object_display: "software developer".to_string(),
+            valid_from: None,
+            valid_until: None,
             confidence: 0.95,
             score: 1.0,
             temporal_boost: 1.0,
@@ -123,6 +125,8 @@ fn render_memory_schema_basic() {
             subject_name: "Devansh".to_string(),
             relationship_type: "has_partner".to_string(),
             object_display: "Alice".to_string(),
+            valid_from: None,
+            valid_until: None,
             confidence: 0.95,
             score: 1.0,
             temporal_boost: 1.0,
@@ -151,6 +155,8 @@ fn render_unknown_relationship() {
         subject_name: "Devansh".to_string(),
         relationship_type: "loves_eating".to_string(),
         object_display: "sushi".to_string(),
+        valid_from: None,
+        valid_until: None,
         confidence: 0.5,
         score: 1.0,
         temporal_boost: 1.0,
@@ -163,6 +169,112 @@ fn render_unknown_relationship() {
     };
     let line = render_fact_line(&fact);
     assert_eq!(line, "Devansh loves eating sushi");
+}
+
+#[test]
+fn render_fact_line_emits_valid_from_only_as_iso_utc() {
+    let fact = RankedFact {
+        fact_id: 1,
+        subject_name: "Devansh".to_string(),
+        relationship_type: "has_event".to_string(),
+        object_display: "Property Check-In".to_string(),
+        valid_from: chrono::Utc
+            .with_ymd_and_hms(2025, 7, 16, 0, 0, 0)
+            .unwrap()
+            .into(),
+        valid_until: None,
+        confidence: 0.5,
+        score: 1.0,
+        temporal_boost: 1.0,
+        memory_weight: 1.0,
+        priority_boost: 1.0,
+        centrality_boost: 1.0,
+        category_ids: vec![],
+        bucket: MemoryBucket::Upcoming,
+        char_estimate: 30,
+    };
+
+    assert_eq!(
+        render_fact_line(&fact),
+        "Devansh has an event Property Check-In (2025-07-16T00:00:00Z → ...)"
+    );
+}
+
+#[test]
+fn render_fact_line_emits_both_bounds_as_iso_utc() {
+    let fact = RankedFact {
+        fact_id: 1,
+        subject_name: "Devansh".to_string(),
+        relationship_type: "visited".to_string(),
+        object_display: "Geneva".to_string(),
+        valid_from: chrono::Utc
+            .with_ymd_and_hms(2025, 7, 16, 0, 0, 0)
+            .unwrap()
+            .into(),
+        valid_until: chrono::Utc
+            .with_ymd_and_hms(2025, 7, 20, 0, 0, 0)
+            .unwrap()
+            .into(),
+        confidence: 0.5,
+        score: 1.0,
+        temporal_boost: 1.0,
+        memory_weight: 1.0,
+        priority_boost: 1.0,
+        centrality_boost: 1.0,
+        category_ids: vec![],
+        bucket: MemoryBucket::Upcoming,
+        char_estimate: 30,
+    };
+
+    assert_eq!(
+        render_fact_line(&fact),
+        "Devansh visited Geneva (2025-07-16T00:00:00Z → 2025-07-20T00:00:00Z)"
+    );
+}
+
+#[test]
+fn render_fact_line_omits_bounds_when_both_are_absent() {
+    let fact = RankedFact {
+        fact_id: 1,
+        subject_name: "Devansh".to_string(),
+        relationship_type: "has_partner".to_string(),
+        object_display: "Alice".to_string(),
+        valid_from: None,
+        valid_until: None,
+        confidence: 0.5,
+        score: 1.0,
+        temporal_boost: 1.0,
+        memory_weight: 1.0,
+        priority_boost: 1.0,
+        centrality_boost: 1.0,
+        category_ids: vec![],
+        bucket: MemoryBucket::Relationships,
+        char_estimate: 30,
+    };
+
+    assert_eq!(render_fact_line(&fact), "Devansh is partnered with Alice");
+}
+
+#[test]
+fn format_upcoming_line_emits_iso_bounds_and_human_suffix() {
+    let now = Utc.with_ymd_and_hms(2025, 7, 15, 12, 0, 0).unwrap();
+    let when = Utc.with_ymd_and_hms(2025, 7, 16, 0, 0, 0).unwrap();
+    let until = Utc.with_ymd_and_hms(2025, 7, 20, 0, 0, 0).unwrap();
+
+    let line = format_upcoming_line(
+        "Devansh",
+        "has_event",
+        Some("Property Check-In"),
+        None,
+        when,
+        Some(until),
+        now,
+    );
+
+    assert_eq!(
+        line,
+        "- Devansh has event Property Check-In (2025-07-16T00:00:00Z → 2025-07-20T00:00:00Z, 16 July, in 1 day)"
+    );
 }
 
 #[test]
@@ -222,6 +334,8 @@ fn render_connector_predicates_with_complete_grammar() {
             subject_name: subject_name.to_string(),
             relationship_type: relationship_type.to_string(),
             object_display: object_display.to_string(),
+            valid_from: None,
+            valid_until: None,
             confidence: 0.5,
             score: 1.0,
             temporal_boost: 1.0,
@@ -294,5 +408,8 @@ fn render_connector_predicates_with_complete_grammar() {
 
 #[test]
 fn estimate_chars_basic() {
-    assert_eq!(estimate_chars("Alice", "has_partner", "Bob"), 22);
+    assert_eq!(
+        estimate_chars("Alice", "has_partner", "Bob", None, None),
+        22
+    );
 }

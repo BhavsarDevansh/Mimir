@@ -1,5 +1,6 @@
 //! Memory schema and ranking types for the condensation pipeline.
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::Type;
 use static_assertions::const_assert;
@@ -70,6 +71,10 @@ pub struct RankedFact {
     pub subject_name: String,
     pub relationship_type: String,
     pub object_display: String,
+    /// UTC timestamp from which the fact became true.
+    pub valid_from: Option<DateTime<Utc>>,
+    /// UTC timestamp at which the fact stopped being true, if known.
+    pub valid_until: Option<DateTime<Utc>>,
     pub confidence: f32,
     pub score: f32,
     pub temporal_boost: f32,
@@ -176,6 +181,8 @@ mod tests {
             subject_name: format!("s{id}"),
             relationship_type: "r".to_string(),
             object_display: "o".to_string(),
+            valid_from: None,
+            valid_until: None,
             confidence: 1.0,
             score: 1.0,
             temporal_boost: 0.0,

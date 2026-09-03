@@ -56,7 +56,13 @@ Mimir exposes three LLM-callable tools that let the agent query your personal kn
       "entity": { "id": 2, "name": "London", "entity_type": "Place" },
       "match_score": 0.0,
       "top_facts": [
-        { "predicate": "located_in", "object_literal": "United Kingdom", "confidence": 0.99 }
+        {
+          "predicate": "located_in",
+          "object_literal": "United Kingdom",
+          "confidence": 0.99,
+          "valid_from": "2020-01-01T00:00:00Z",
+          "valid_until": "2023-01-01T00:00:00Z"
+        }
       ]
     }
   ]
@@ -64,6 +70,8 @@ Mimir exposes three LLM-callable tools that let the agent query your personal kn
 ```
 
 ## Best Practices
+
+- **Treat temporal bounds as machine-readable facts.** Known timestamps use RFC 3339 UTC, so the agent can decide whether information is historical, current, or scheduled without guessing.
 
 - **Use tools for detailed lookups.** Don't rely on the injected memory summary as an exhaustive source of facts; it is a curated overview, not a database dump.
 - **Prefer `kg_query` when you know the entity name.** It returns paginated, filtered facts with provenance.

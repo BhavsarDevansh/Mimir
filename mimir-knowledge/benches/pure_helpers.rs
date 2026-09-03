@@ -160,6 +160,8 @@ fn bench_memory_schema_all_facts(c: &mut Criterion) {
         subject_name: format!("s{id}"),
         relationship_type: "r".to_string(),
         object_display: "o".to_string(),
+        valid_from: None,
+        valid_until: None,
         confidence: 1.0,
         score: 1.0,
         temporal_boost: 0.0,

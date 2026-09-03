@@ -265,20 +265,17 @@ async fn insert_alias_and_resolve() {
 async fn ensure_relationship_type_resolves_alias_instead_of_conflicting() {
     let (_dir, kg) = setup().await;
 
-    let existing_id = kg
-        .ensure_relationship_type("employer_entity")
+    let existing_id = kg.ensure_relationship_type("works_at").await.unwrap();
+    let alias_id = kg
+        .resolve_relationship_type_alias("employer")
         .await
-        .unwrap();
-    kg.insert_relationship_type_alias("test_employer_alias", existing_id)
-        .await
-        .unwrap();
+        .unwrap()
+        .expect("seeded works_for alias");
+    assert_eq!(alias_id, existing_id);
 
     // "test_employer_alias" is an alias, so ensure_relationship_type resolves it to the
     // canonical type rather than creating a new one or failing.
-    let resolved_id = kg
-        .ensure_relationship_type("test_employer_alias")
-        .await
-        .unwrap();
+    let resolved_id = kg.ensure_relationship_type("employer").await.unwrap();
     assert_eq!(resolved_id, existing_id);
 }
 
@@ -409,11 +406,8 @@ async fn alias_resolution_returns_canonical_id() {
 async fn insert_relationship_type_rejects_canonical_name_that_shadows_alias() {
     let (_dir, kg) = setup().await;
 
-    let existing_id = kg
-        .ensure_relationship_type("employer_entity")
-        .await
-        .unwrap();
-    kg.insert_relationship_type_alias("test_employer_alias", existing_id)
+    let _existing_id = kg.ensure_relationship_type("works_at").await.unwrap();
+    kg.insert_relationship_type_alias("test_employer_alias", _existing_id)
         .await
         .unwrap();
 
@@ -463,13 +457,7 @@ async fn transactional_fact_insert_resolves_relationship_type_alias() {
 
     let (_dir, kg) = setup().await;
 
-    let existing_id = kg
-        .ensure_relationship_type("employer_entity")
-        .await
-        .unwrap();
-    kg.insert_relationship_type_alias("test_employer_alias", existing_id)
-        .await
-        .unwrap();
+    let existing_id = kg.ensure_relationship_type("works_at").await.unwrap();
 
     let entity = kg
         .create_entity("Alice", EntityType::Person, &[])
@@ -478,7 +466,7 @@ async fn transactional_fact_insert_resolves_relationship_type_alias() {
 
     let fact = NewFact {
         subject_id: entity.id,
-        relationship_type: "test_employer_alias".to_string(),
+        relationship_type: "employer".to_string(),
         object_id: None,
         object_literal: Some("Acme Corp".to_string()),
         valid_from: None,
@@ -586,8 +574,9 @@ async fn existing_relationship_type_priority_is_not_replaced_by_upsert() {
         .create_entity("Alice", EntityType::Person, &[])
         .await
         .unwrap();
-    let fact = kg
-        .insert_fact(NewFact {
+    let fact = mimir_knowledge::queries::fact::insert_fact(
+        kg.pool(),
+        &NewFact {
             subject_id: subject.id,
             relationship_type: "test_cached_priority".to_string(),
             object_id: None,
@@ -604,9 +593,13 @@ async fn existing_relationship_type_priority_is_not_replaced_by_upsert() {
             confidence: None,
             parent_fact_ids: vec![],
             category_ids: vec![],
-        })
-        .await
-        .unwrap();
+        },
+        created.id,
+        0.80,
+        chrono::Utc::now(),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(fact.relationship_type_id, created.id);
     assert_eq!(fact.memory_priority_id, 2);

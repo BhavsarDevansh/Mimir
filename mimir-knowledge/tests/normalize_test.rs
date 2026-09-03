@@ -126,6 +126,66 @@ async fn connector_normalized_fact_inserts_with_connector_provenance() {
 }
 
 #[tokio::test]
+async fn connector_unknown_predicate_staging_failure_is_a_hard_error() {
+    let (kg, _dir) = fresh_kg().await;
+    let fact = rome_event("cal-evt-123", None);
+    let fact = NormalizedFact {
+        relationship_type: "owes".to_string(),
+        ..fact
+    };
+    let error = normalize_and_insert(
+        &kg,
+        vec![fact],
+        Provenance::connector(
+            i32::MAX,
+            ConnectorType::Email,
+            ExtractionMethod::StructuredParse,
+        ),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(error, KnowledgeError::Pool(_)));
+}
+
+#[tokio::test]
+async fn connector_unknown_predicate_staging_increments_counter_atomically() {
+    let (kg, _dir) = fresh_kg().await;
+    let calendar_instance = upsert(&kg, ConnectorType::Calendar, "calendar-1").await;
+    let fact = rome_event("cal-evt-123", None);
+    let fact = NormalizedFact {
+        relationship_type: "owes".to_string(),
+        ..fact
+    };
+
+    let outcome = normalize_and_insert(
+        &kg,
+        vec![fact],
+        Provenance::connector(
+            calendar_instance,
+            ConnectorType::Calendar,
+            ExtractionMethod::StructuredParse,
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(outcome.errors.len(), 1);
+    let staged = kg
+        .list_unrecognized_facts(Some("unmapped"), 100, 0)
+        .await
+        .unwrap()
+        .0;
+    assert_eq!(staged.len(), 1);
+    assert_eq!(
+        kg.get_connector(calendar_instance)
+            .await
+            .unwrap()
+            .unwrap()
+            .facts_staged,
+        1
+    );
+}
+
+#[tokio::test]
 async fn per_fact_extraction_method_override_wins_over_batch_provenance() {
     // A mixed-method `extract()` batch (e.g. the Email connector running a
     // deterministic layer alongside the LLM layer) sets `extraction_method`

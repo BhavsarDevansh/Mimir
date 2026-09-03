@@ -391,6 +391,17 @@ mimir kb reject 42
 mimir kb reject 42 --reason "entered in error"
 ```
 
+### `mimir kb staged`
+
+Review facts staged when their relationship predicate was outside the closed taxonomy. List unmapped rows, map a row to an existing leaf, or reject it. The daemon paginates the backing API with a default and maximum page size of 100, so a large review backlog cannot load every payload at once. Mapping is explicit and validates that the target leaf is emit-eligible; staged facts are never auto-created or auto-dropped.
+
+```bash
+mimir kb staged list
+mimir kb staged list --json
+mimir kb staged map 9 --relationship-type-id 12 --note "maps to has_event"
+mimir kb staged reject 9 --note "not relevant"
+```
+
 ### `mimir kb heatmap`
 
 Render a knowledge-density snapshot of the graph: totals (facts, entities, average confidence), top entities and predicates by fact count, facts per month, and the confidence distribution (explicit / connector / inference / casual bands). Trashed facts are excluded.

@@ -33,7 +33,9 @@ pub(super) enum ProcessResult {
 /// confidence from the provenance, validate categories, run the sensitivity
 /// gate, and insert (inheriting corroboration / supersession / inference from
 /// `insert_fact_in_tx`). Sensitive facts land as `pending_confirmation`.
-/// Per-fact errors are tolerated so one bad fact never aborts the batch.
+/// Per-fact validation and insertion errors are tolerated so one bad fact
+/// never aborts the batch; a failed durable staging write is a hard error so
+/// the source item is never acknowledged without its staged record.
 pub async fn normalize_and_insert(
     kg: &KnowledgeGraph,
     facts: Vec<NormalizedFact>,
@@ -67,28 +69,45 @@ pub async fn normalize_and_insert(
         // and reads stay concurrent.
         let _write_guard = kg.write_lock().lock().await;
 
-        // Canonicalise the predicate: `ensure_relationship_type` normalises,
-        // consults the alias table (single source of truth), and auto-creates
-        // a canonical type + self-alias on a miss. Every predicate the
-        // connectors emit deterministically is seeded canonical by migration
-        // 053 (issue #412) and pinned by the `CONNECTOR_EMITTED_PREDICATES`
-        // registration tests, and the email LLM layer validates its emitted
-        // predicates against the canonical vocabulary, so the auto-create
-        // fallback only fires for genuinely novel runtime vocabulary. The id
-        // threads through to the per-fact processor so the resolution is not
-        // repeated downstream.
-        let relationship_type_id = match kg.ensure_relationship_type(&fact.relationship_type).await
+        // Resolve the closed taxonomy leaf at the shared ingestion boundary.
+        // Missing types are durable staging records, never silently dropped
+        // and never auto-created (#468).
+        let relationship_type_id = match kg
+            .resolve_emit_eligible_relationship_type(&fact.relationship_type)
+            .await
         {
-            Ok(id) => id,
+            Ok(Some(id)) => id,
+            Ok(None) => {
+                let payload_json = serde_json::to_string(&fact).unwrap_or_else(|_error| {
+                    format!(r#"{{"relationship_type":{:?}}}"#, fact.relationship_type)
+                });
+                if let Err(error) = kg
+                    .stage_unrecognized_fact(
+                        provenance.connector_instance_id,
+                        fact.raw_reference.as_deref(),
+                        &fact.relationship_type,
+                        &payload_json,
+                        None,
+                    )
+                    .await
+                {
+                    return Err(error);
+                } else {
+                    outcome.errors.push(KnowledgeError::Validation(format!(
+                        "predicate '{}' is not an emit-eligible taxonomy leaf; staged for review",
+                        fact.relationship_type
+                    )));
+                }
+                continue;
+            }
             Err(error) => {
                 outcome.errors.push(error);
                 continue;
             }
         };
 
-        // `ensure_relationship_type` always creates/resolves the type, so the
-        // name lookup succeeds in practice; fall back to the normalized input
-        // purely as a defensive measure.
+        // Canonicalise the stored fact name after resolving aliases so
+        // rendering and corroboration always see the controlled leaf.
         let canonical_name = kg.relationship_type_name(relationship_type_id).await;
         fact.relationship_type = canonical_name
             .unwrap_or_else(|| crate::normalize_alias(&fact.relationship_type).unwrap_or_default());
@@ -256,6 +275,27 @@ async fn process_normalized_fact(
                 tracing::warn!(
                     "unknown category {} for fact '{} {} {}'; ignoring",
                     cat_id,
+                    subject_name,
+                    relationship_type,
+                    object,
+                );
+            }
+        }
+    }
+
+    // Category guarantee (#468): when the producer supplies no valid
+    // catalogue category, resolve the deterministic DB-backed relation rule
+    // at the shared boundary. Producer-supplied categories remain refinements.
+    if valid_category_ids.is_empty() {
+        match kg
+            .default_category_id_for_relationship_type(relationship_type_id)
+            .await?
+        {
+            Some(category_id) => valid_category_ids.push(category_id),
+            None => {
+                tracing::warn!(
+                    "no category rule for relationship_type_id {} for fact '{} {} {}'",
+                    relationship_type_id,
                     subject_name,
                     relationship_type,
                     object,

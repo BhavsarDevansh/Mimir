@@ -165,7 +165,7 @@ async fn favourite_family_is_prompt_instructed_and_allowed() {
         "classification": "Explicit",
         "subject": "devansh",
         "subject_type": "Person",
-        "relationship_type": "favourite_movie",
+        "relationship_type": "prefers",
         "object": "Inception",
         "object_is_entity": false,
         "is_sensitive": false
@@ -183,7 +183,7 @@ async fn favourite_family_is_prompt_instructed_and_allowed() {
             .relationship_type_name(outcome.inserted[0].relationship_type_id)
             .await
             .as_deref(),
-        Some("favourite_movie")
+        Some("prefers")
     );
 }
 
@@ -265,12 +265,12 @@ async fn strict_resolver_allows_favourite_family() {
 
     let id = tg
         .kg
-        .resolve_canonical_relationship_type("favourite_movie")
+        .resolve_canonical_relationship_type("prefers")
         .await
         .unwrap();
     assert_eq!(
         tg.kg.relationship_type_name(id).await.as_deref(),
-        Some("favourite_movie")
+        Some("prefers")
     );
 }
 
@@ -431,12 +431,11 @@ async fn canonical_const_matches_seeded_relationship_types() {
 
     // Every seeded canonical name must be in the allow-list const. Abstract
     // ontology parents (issue #403) are query-only DAG roots and are excluded.
-    let seeded: Vec<String> = sqlx::query_scalar(
-        "SELECT name FROM relationship_types WHERE description NOT LIKE 'Auto-created relationship_type: %' AND description NOT LIKE 'Abstract ontology parent%'",
-    )
-    .fetch_all(tg.kg.pool())
-    .await
-    .unwrap();
+    let seeded: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM relationship_types WHERE emit_eligible = TRUE")
+            .fetch_all(tg.kg.pool())
+            .await
+            .unwrap();
     for name in &seeded {
         assert!(
             mimir_knowledge::CANONICAL_PREDICATES.contains(&name.as_str()),
@@ -452,7 +451,7 @@ async fn canonical_const_matches_seeded_relationship_types() {
             .await
             .unwrap_or_else(|e| panic!("{name} must resolve: {e}"));
         let (seeded_count,): (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM relationship_types WHERE id = ? AND description NOT LIKE 'Auto-created relationship_type: %'",
+            "SELECT COUNT(*) FROM relationship_types WHERE id = ? AND emit_eligible = TRUE",
         )
         .bind(id)
         .fetch_one(tg.kg.pool())
@@ -484,24 +483,30 @@ async fn reconciliation_migration_deletes_unreferenced_auto_created_types() {
         )
         .await
         .unwrap();
-    kg.insert_fact(mimir_knowledge::models::fact::NewFact {
-        subject_id: subject.id,
-        relationship_type: "moved_into".to_string(),
-        object_id: None,
-        object_literal: Some("a suburb".to_string()),
-        valid_from: None,
-        valid_until: None,
-        source_type: mimir_knowledge::models::source::SourceType::UserEdit,
-        connector_instance_id: None,
-        connector_type: None,
-        raw_reference: None,
-        extraction_method: None,
-        inferred: false,
-        inference_depth: 0,
-        confidence: None,
-        parent_fact_ids: Vec::new(),
-        category_ids: Vec::new(),
-    })
+    mimir_knowledge::queries::fact::insert_fact(
+        kg.pool(),
+        &mimir_knowledge::models::fact::NewFact {
+            subject_id: subject.id,
+            relationship_type: "moved_into".to_string(),
+            object_id: None,
+            object_literal: Some("a suburb".to_string()),
+            valid_from: None,
+            valid_until: None,
+            source_type: mimir_knowledge::models::source::SourceType::UserEdit,
+            connector_instance_id: None,
+            connector_type: None,
+            raw_reference: None,
+            extraction_method: None,
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
+        },
+        with_fact,
+        0.80,
+        chrono::Utc::now(),
+    )
     .await
     .unwrap();
 

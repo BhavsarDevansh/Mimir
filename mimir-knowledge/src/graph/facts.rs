@@ -15,6 +15,33 @@ use crate::models::fact::NewFact;
 use crate::models::source::{ExtractionMethod, SourceType};
 
 impl KnowledgeGraph {
+    /// Resolve and canonicalise a new fact against the closed taxonomy before
+    /// insertion. This is shared by single and batch writes so category
+    /// fallback and leaf-name normalisation cannot drift.
+    async fn resolve_and_prepare_new_fact(
+        &self,
+        fact: &mut models::fact::NewFact,
+    ) -> Result<i16, KnowledgeError> {
+        let relationship_type_id = self
+            .require_emit_eligible_relationship_type(&fact.relationship_type)
+            .await?;
+        if let Some(name) = self.relationship_type_name(relationship_type_id).await {
+            fact.relationship_type = name;
+        }
+        if fact.category_ids.is_empty() {
+            let category_id = self
+                .default_category_id_for_relationship_type(relationship_type_id)
+                .await?
+                .ok_or_else(|| {
+                    KnowledgeError::Validation(format!(
+                        "emit-eligible relationship type {relationship_type_id} has no default category rule",
+                    ))
+                })?;
+            fact.category_ids.push(category_id);
+        }
+        Ok(relationship_type_id)
+    }
+
     // ------------------------------------------------------------------
     // Fact CRUD delegates
     // ------------------------------------------------------------------
@@ -34,7 +61,7 @@ impl KnowledgeGraph {
     /// Skips rule-engine passes; callers should trigger them separately if needed.
     pub async fn insert_facts_batch(
         &self,
-        facts: Vec<models::fact::NewFact>,
+        mut facts: Vec<models::fact::NewFact>,
     ) -> Result<Vec<models::fact::Fact>, KnowledgeError> {
         if facts.is_empty() {
             return Ok(Vec::new());
@@ -42,6 +69,12 @@ impl KnowledgeGraph {
 
         let mut tx = self.pool.begin().await?;
         let now = self.now();
+
+        let mut relationship_type_ids = Vec::with_capacity(facts.len());
+        for fact in &mut facts {
+            let relationship_type_id = self.resolve_and_prepare_new_fact(fact).await?;
+            relationship_type_ids.push(relationship_type_id);
+        }
 
         let referenced_ids: HashSet<i32> = facts
             .iter()
@@ -115,11 +148,7 @@ impl KnowledgeGraph {
             }
         }
 
-        for new_fact in &facts {
-            let relationship_type_id = self
-                .ensure_relationship_type_in_tx(&mut tx, &new_fact.relationship_type)
-                .await?;
-
+        for (new_fact, relationship_type_id) in facts.iter().zip(relationship_type_ids) {
             let connector_score = new_fact
                 .connector_instance_id
                 .and_then(|instance_id| instance_types.get(&instance_id).copied())
@@ -177,10 +206,8 @@ impl KnowledgeGraph {
         ctx: &'a mut CascadeContext,
     ) -> Pin<Box<dyn Future<Output = Result<models::fact::Fact, KnowledgeError>> + Send + 'a>> {
         Box::pin(async move {
-            // Resolve predicate name to id.
-            let relationship_type_id = self
-                .ensure_relationship_type(&new_fact.relationship_type)
-                .await?;
+            // Resolve and canonicalise the predicate, and apply category fallback.
+            let relationship_type_id = self.resolve_and_prepare_new_fact(&mut new_fact).await?;
 
             // Cycle detection: skip duplicate triples in the same cascade.
             if ctx.contains(

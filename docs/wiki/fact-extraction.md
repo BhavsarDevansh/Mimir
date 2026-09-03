@@ -8,8 +8,8 @@ The fact-extraction pipeline processes chat input to extract and store facts as 
 
 The extraction pipeline applies Rust-side normalisation and splitting to improve the quality of extracted facts:
 
-- **Predicate resolution**: The LLM's relationship type is resolved through the alias table (the single source of truth). Common synonyms map to canonical names — for example, `attended` → `studied_at`, `hobbies` → `hobby` — purely from seeded aliases, with no hardcoded synonym list in code. An unknown predicate is rejected on the conversational path instead of being auto-registered as a new canonical type (issue #401).
-- **List splitting**: When the LLM outputs a single fact with a comma-separated list (e.g., `hobby → "Geopolitics, Software Development, Tech"`), the pipeline automatically splits it into three independent facts. This applies to the multi-valued predicates (`hobby`, `likes`, `skill`, family relations, and the `favourite_<thing>` family such as `favourite_movie`), so a list of favourite films or pets is stored as separate facts rather than one comma-joined value.
+- **Predicate resolution**: The extraction schema uses a closed `relationship_type` enum generated from the database taxonomy. Rust then resolves that leaf through controlled aliases — for example, `attended` → `studied_at`, `likes` → `prefers` — and rejects unknown predicates instead of auto-registering them (issues #401 and #468). A fact that reaches normalization with an unknown predicate is staged for review rather than silently discarded.
+- **List splitting**: When the LLM outputs a single fact with a comma-separated list (e.g., `hobby → "Geopolitics, Software Development, Tech"`), the pipeline automatically splits it into three independent facts. This applies to the multi-valued predicates (`hobby`, `prefers`, `skill`, family relations), so a list of favourite films or pets is stored as separate facts rather than one comma-joined value.
 - **Deduplication**: Before inserting a new fact, the pipeline checks if an identical active fact already exists. If so, it increments the confidence instead of creating a duplicate.
 
 ## Shared with connectors
@@ -20,9 +20,9 @@ The resolve → confidence → sensitivity-gate → insert steps are not convers
 
 Mimir looks for **subject-predicate-object** triples in your messages:
 
-> "My favourite colour is blue."
+> "I prefer blue."
 >
-> → Subject: you, Predicate: favourite_colour, Object: blue
+> → Subject: you, Predicate: prefers, Object: blue
 
 ## Learning Modes
 
@@ -30,7 +30,7 @@ Not everything you say is treated the same way:
 
 | Mode | Example | Confidence | Overwrites? |
 |------|---------|-----------|-------------|
-| **Explicit** | "My favourite colour is blue." | 1.0 (certain) | Yes — replaces old fact |
+| **Explicit** | "I prefer blue." | 1.0 (certain) | Yes — replaces old fact |
 | **Casual** | "Blue is a nice colour." | 0.30 (tentative) | No — coexists with explicit |
 | **Correction** | "Actually, it's green, not blue." | 1.0 | Yes — old fact is corrected |
 
@@ -39,7 +39,7 @@ Not everything you say is treated the same way:
 Mimir understands when facts change over time:
 
 - **"I moved to London last month"** → The "lives_in" fact gets a start date. Your previous address is kept with an end date.
-- **"My favourite colour has always been green"** → The old fact is marked as incorrect and archived.
+- **"My preferred colour has always been green"** → The old fact is marked as incorrect and archived.
 
 ## Sensitive Facts
 
@@ -91,4 +91,6 @@ As of issue #136, Mimir no longer ships a hardcoded synonym map for relationship
 
 ### Predicates Are Allow-Listed (v0.126.0)
 
-As of issue #401, the conversational extraction path enforces a Rust-side canonical predicate allow-list: the LLM must use one of the seeded predicates (or a registered alias), and anything else — for example an invented `moved_into` — is rejected with a clear error instead of being silently stored as a new predicate. This keeps the predicate vocabulary stable so synonyms corroborate and supersede each other correctly, and it means the memory renderer never falls back to a bare invented verb. The prompt-instructed `favourite_<thing>` family (e.g. `favourite_movie`) remains available. One malformed predicate never blocks the rest of a batch — the error is reported and the other facts are still stored.
+As of issues #401 and #468, conversational extraction uses a closed `relationship_type` enum generated from the DB taxonomy, then resolves aliases and emits only a queryable leaf. Anything else — for example an invented `moved_into` — is staged for review instead of being silently stored as a new predicate. This keeps the predicate vocabulary stable so synonyms corroborate and supersede each other correctly. One malformed predicate never blocks the rest of a batch — the error is reported and the other facts are still stored.
+
+As of issue #468, the email prose layer stages malformed or unrecognized facts in a durable review queue rather than dropping them. Connector status reports `facts_accepted`, `facts_dropped`, and `facts_staged`, so a vocabulary gap is visible instead of being hidden behind the item count. See [Closed Taxonomy and Fact Staging](closed-taxonomy-staging.md).

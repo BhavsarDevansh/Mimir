@@ -490,6 +490,59 @@ async fn test_kb_reject_error() {
 }
 
 #[tokio::test]
+async fn test_kb_staged_review() {
+    let server = MockServer::start().await;
+    let payload = UnrecognizedFactListResponse {
+        total: 1,
+        items: vec![UnrecognizedFactRow {
+            id: 9,
+            connector_instance_id: Some(2),
+            raw_reference: Some("m-1".to_string()),
+            relationship_type_raw: "owes".to_string(),
+            payload_json: "{}".to_string(),
+            status: "unmapped".to_string(),
+            proposed_relationship_type_id: None,
+            resolution_note: None,
+            created_at: "2020-01-01T00:00:00Z".to_string(),
+            updated_at: "2020-01-01T00:00:00Z".to_string(),
+        }],
+    };
+    Mock::given(method("GET"))
+        .and(path("/kb/staged"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&payload))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/kb/staged/9/map"))
+        .and(body_partial_json(serde_json::json!({
+            "relationship_type_id": 12,
+            "note": "mapped to has_event"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": 9,
+            "relationship_type_id": 12
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/kb/staged/9/reject"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let client = MimirClient::new(server.uri());
+    let staged = client.kb_staged().await.unwrap();
+    assert_eq!(staged.total, 1);
+    assert_eq!(staged.items[0].relationship_type_raw, "owes");
+    let mapped = client
+        .kb_staged_map(9, 12, Some("mapped to has_event"))
+        .await
+        .unwrap();
+    assert_eq!(mapped.relationship_type_id, 12);
+    client.kb_staged_reject(9, None).await.unwrap();
+}
+
+#[tokio::test]
 async fn test_kb_merges_list() {
     let server = MockServer::start().await;
     let payload = MergeQueueListResponse {

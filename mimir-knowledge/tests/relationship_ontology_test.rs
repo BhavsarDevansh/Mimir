@@ -22,26 +22,25 @@ async fn seed_creates_expected_predicate_count() {
         .await
         .unwrap();
     assert_eq!(
-        count, 62,
-        "62 relationship types after seed (58 canonical verbs + 4 abstract DAG parents, issues #403/#412)"
+        count, 75,
+        "75 relationship types after seed (56 canonical leaves + 15 roots + 4 legacy DAG parents)"
     );
 
-    // The six new core verbs are present with their explicit ids.
-    for (id, name) in [
-        (26i16, "studied"),
-        (27, "completed_degree"),
-        (28, "educational_status"),
-        (29, "job_title"),
-        (30, "likes"),
-        (31, "dislikes"),
+    for name in [
+        "studied",
+        "completed_degree",
+        "educational_status",
+        "job_title",
+        "prefers",
+        "dislikes",
     ] {
-        let (db_name,): (String,) =
-            sqlx::query_as("SELECT name FROM relationship_types WHERE id = ?")
-                .bind(id)
+        let (count,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM relationship_types WHERE name = ?")
+                .bind(name)
                 .fetch_one(kg.pool())
                 .await
                 .unwrap();
-        assert_eq!(db_name, name);
+        assert_eq!(count, 1, "{name} seed missing");
     }
 }
 
@@ -53,7 +52,7 @@ async fn new_predicates_have_self_aliases() {
         "completed_degree",
         "educational_status",
         "job_title",
-        "likes",
+        "prefers",
         "dislikes",
     ] {
         // Read-only canonical id lookup — do not mutate the DB in a seed

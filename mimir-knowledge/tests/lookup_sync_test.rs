@@ -323,75 +323,16 @@ async fn relationship_types_sync() {
     let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
         .await
         .unwrap();
-    assert_enum_db_sync(
-        &kg,
-        "SELECT id, name FROM relationship_types WHERE id = ?",
-        "SELECT id, name FROM relationship_types",
-        "SELECT COUNT(*) FROM relationship_types",
-        &[
-            (2, "visited", "visited"),
-            (3, "owns", "owns"),
-            (4, "works_as", "works_as"),
-            (5, "has_partner", "has_partner"),
-            (6, "has_parent", "has_parent"),
-            (7, "born_on", "born_on"),
-            (8, "died_on", "died_on"),
-            (9, "located_in", "located_in"),
-            (10, "created_on", "created_on"),
-            (11, "has_preference", "has_preference"),
-            (12, "rejected_action", "rejected_action"),
-            (13, "studied_at", "studied_at"),
-            (25, "has_name", "has_name"),
-            (14, "hobby", "hobby"),
-            (15, "works_at", "works_at"),
-            (16, "resides_in", "resides_in"),
-            (18, "has_pets", "has_pets"),
-            (19, "has_sibling", "has_sibling"),
-            (20, "has_child", "has_child"),
-            (21, "preferred_name", "preferred_name"),
-            (22, "favourite_food", "favourite_food"),
-            (23, "favourite_colour", "favourite_colour"),
-            (24, "health_condition", "health_condition"),
-            (26, "studied", "studied"),
-            (27, "completed_degree", "completed_degree"),
-            (28, "educational_status", "educational_status"),
-            (29, "job_title", "job_title"),
-            (30, "likes", "likes"),
-            (31, "dislikes", "dislikes"),
-            (32, "skill", "skill"),
-            (33, "has_appointment", "has_appointment"),
-            (34, "allergy", "allergy"),
-            (35, "medication", "medication"),
-            (36, "diagnosis", "diagnosis"),
-            (37, "income", "income"),
-            (38, "salary", "salary"),
-            (39, "password", "password"),
-            (40, "ssn", "ssn"),
-            (41, "social_security_number", "social_security_number"),
-            (42, "bank_account", "bank_account"),
-            (43, "credit_card", "credit_card"),
-            (44, "insurance", "insurance"),
-            (45, "residence", "residence"),
-            (46, "employment", "employment"),
-            (47, "education", "education"),
-            (48, "containment", "containment"),
-            (49, "has_event", "has_event"),
-            (50, "attending", "attending"),
-            (51, "took_photo_at", "took_photo_at"),
-            (52, "took_photo", "took_photo"),
-            (53, "has_flight", "has_flight"),
-            (54, "departs_from", "departs_from"),
-            (55, "arrives_at", "arrives_at"),
-            (56, "operated_by", "operated_by"),
-            (57, "has_booking", "has_booking"),
-            (58, "has_order", "has_order"),
-            (59, "purchased_from", "purchased_from"),
-            (60, "has_delivery", "has_delivery"),
-            (61, "shipped_by", "shipped_by"),
-            (62, "delivered_to", "delivered_to"),
-            (63, "has_ticket", "has_ticket"),
-            (64, "issued_by", "issued_by"),
-        ],
-    )
-    .await;
+
+    for name in mimir_knowledge::CANONICAL_PREDICATES {
+        let (id, db_name): (i16, String) = sqlx::query_as(
+            "SELECT id, name FROM relationship_types WHERE name = ? AND emit_eligible = TRUE",
+        )
+        .bind(name)
+        .fetch_one(kg.pool())
+        .await
+        .unwrap_or_else(|error| panic!("canonical predicate {name} missing: {error}"));
+        assert_eq!(db_name, *name);
+        assert!(id > 0);
+    }
 }

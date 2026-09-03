@@ -262,7 +262,7 @@ async fn test_v1_chat_without_user_persists_default_session_and_learns() {
     assert_eq!(messages[2].content, "Noted.");
 
     assert!(
-        wait_for_favourite_colour(&state).await,
+        wait_for_prefers_blue(&state).await,
         "the remember.chat hook must fire for unkeyed requests and persist the fact"
     );
 }
@@ -388,7 +388,7 @@ async fn test_v1_chat_stream_without_user_persists_and_learns() {
     assert_eq!(messages[2].content, "Noted.");
 
     assert!(
-        wait_for_favourite_colour(&state).await,
+        wait_for_prefers_blue(&state).await,
         "unkeyed stream turns must fire the learning hook and persist the fact"
     );
 }

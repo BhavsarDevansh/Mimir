@@ -16,7 +16,7 @@ async fn test_kg_traverse_linear_chain() {
 
     let f1 = NewFact {
         subject_id: a,
-        relationship_type: "knows".to_string(),
+        relationship_type: "has_partner".to_string(),
         object_id: Some(b),
         object_literal: None,
         valid_from: None,
@@ -34,7 +34,7 @@ async fn test_kg_traverse_linear_chain() {
     };
     let f2 = NewFact {
         subject_id: b,
-        relationship_type: "knows".to_string(),
+        relationship_type: "has_partner".to_string(),
         object_id: Some(c),
         object_literal: None,
         valid_from: None,
@@ -71,7 +71,7 @@ async fn test_kg_traverse_cycle() {
 
     let f1 = NewFact {
         subject_id: a,
-        relationship_type: "knows".to_string(),
+        relationship_type: "has_partner".to_string(),
         object_id: Some(b),
         object_literal: None,
         valid_from: None,
@@ -89,7 +89,7 @@ async fn test_kg_traverse_cycle() {
     };
     let f2 = NewFact {
         subject_id: b,
-        relationship_type: "knows".to_string(),
+        relationship_type: "has_partner".to_string(),
         object_id: Some(a),
         object_literal: None,
         valid_from: None,
@@ -125,7 +125,7 @@ async fn test_kg_traverse_depth_cap() {
 
     let f1 = NewFact {
         subject_id: a,
-        relationship_type: "knows".to_string(),
+        relationship_type: "has_partner".to_string(),
         object_id: Some(b),
         object_literal: None,
         valid_from: None,
@@ -164,7 +164,7 @@ async fn test_kg_traverse_node_cap() {
             .unwrap();
         let f = NewFact {
             subject_id: root,
-            relationship_type: "knows".to_string(),
+            relationship_type: "has_partner".to_string(),
             object_id: Some(node.id),
             object_literal: None,
             valid_from: None,
@@ -203,7 +203,7 @@ async fn test_kg_traverse_predicate_filter() {
 
     let f1 = NewFact {
         subject_id: a,
-        relationship_type: "knows".to_string(),
+        relationship_type: "has_partner".to_string(),
         object_id: Some(b),
         object_literal: None,
         valid_from: None,
@@ -240,11 +240,11 @@ async fn test_kg_traverse_predicate_filter() {
     tg.kg.insert_fact(f1).await.unwrap();
     tg.kg.insert_fact(f2).await.unwrap();
 
-    let pred_id = tg.kg.ensure_relationship_type("knows").await.unwrap();
+    let pred_id = tg.kg.ensure_relationship_type("has_partner").await.unwrap();
     let result = traverse_graph(tg.kg.pool(), a as u32, 1, 50, Some(&[pred_id]))
         .await
         .unwrap();
 
     assert_eq!(result.edges.len(), 1);
-    assert_eq!(result.edges[0].predicate, "knows");
+    assert_eq!(result.edges[0].predicate, "has_partner");
 }

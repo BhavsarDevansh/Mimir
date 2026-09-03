@@ -128,7 +128,7 @@ impl NormalizedLocation {
 /// Entity types and temporal bounds are already typed — no string parsing
 /// happens inside [`normalize_and_insert`](super::normalize_and_insert). An optional [`NormalizedLocation`]
 /// overlay turns a "where" fact into an `entity_locations` row.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct NormalizedFact {
     /// Origin family for this fact. Chat sets `UserEdit`/`Interaction` per
     /// fact (a batch may mix them); connectors set `Connector`.

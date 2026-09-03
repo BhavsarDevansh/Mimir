@@ -192,6 +192,7 @@ async fn to_response(
         item_count,
         facts_accepted: row.facts_accepted,
         facts_dropped: row.facts_dropped,
+        facts_staged: row.facts_staged,
         auth,
     })
 }
@@ -224,6 +225,7 @@ fn to_response_with_count(
         item_count,
         facts_accepted: row.facts_accepted,
         facts_dropped: row.facts_dropped,
+        facts_staged: row.facts_staged,
         auth,
     }
 }

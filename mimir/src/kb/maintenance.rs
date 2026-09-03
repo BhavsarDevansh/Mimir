@@ -297,6 +297,75 @@ pub async fn handle_kb_category(
 // kb pending / confirm / reject (issue #141)
 // ------------------------------------------------------------------
 
+/// Review unrecognized-predicate facts staged by closed taxonomy extraction.
+pub async fn handle_kb_staged(
+    command: crate::cli::StagedCommands,
+    transport: &crate::transport::DaemonTransport,
+) {
+    match command {
+        crate::cli::StagedCommands::List { json } => {
+            let client = make_client(transport);
+            match client.kb_staged().await {
+                Ok(resp) => {
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&resp).unwrap());
+                        return;
+                    }
+                    if resp.items.is_empty() {
+                        println!("No staged facts.");
+                        return;
+                    }
+                    println!("Staged facts ({}):", resp.total);
+                    println!(
+                        "{:<8} {:<12} {:<20} {:<24} Source",
+                        "ID", "Predicate", "Raw reference", "Updated"
+                    );
+                    for row in &resp.items {
+                        println!(
+                            "{:<8} {:<12} {:<20} {:<24} {}",
+                            row.id,
+                            truncate(&row.relationship_type_raw, 12),
+                            truncate(row.raw_reference.as_deref().unwrap_or("-"), 20),
+                            row.updated_at,
+                            row.connector_instance_id
+                                .map(|id| id.to_string())
+                                .unwrap_or_else(|| "-".to_string())
+                        );
+                    }
+                    println!(
+                        "Use `mimir kb staged map <id> --relationship-type-id <id>` to map a row."
+                    );
+                }
+                Err(e) => exit_with_error(e),
+            }
+        }
+        crate::cli::StagedCommands::Map {
+            id,
+            relationship_type_id,
+            note,
+        } => {
+            let client = make_client(transport);
+            match client
+                .kb_staged_map(id, relationship_type_id, note.as_deref())
+                .await
+            {
+                Ok(resp) => println!(
+                    "Mapped staged fact {} to leaf {}.",
+                    resp.id, resp.relationship_type_id
+                ),
+                Err(e) => exit_with_error(e),
+            }
+        }
+        crate::cli::StagedCommands::Reject { id, note } => {
+            let client = make_client(transport);
+            match client.kb_staged_reject(id, note.as_deref()).await {
+                Ok(()) => println!("Rejected staged fact {}.", id),
+                Err(e) => exit_with_error(e),
+            }
+        }
+    }
+}
+
 /// List sensitive facts awaiting confirmation.
 pub async fn handle_kb_pending(json: bool, transport: &crate::transport::DaemonTransport) {
     let client = make_client(transport);

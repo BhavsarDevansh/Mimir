@@ -77,9 +77,18 @@ use crate::email::llm::schema::{build_system_prompt, email_extraction_tool_schem
 /// Outcome of one prose extraction run: the validated facts plus the number
 /// of LLM-emitted facts rejected by Rust-side validation (issue #508), so
 /// the hook can surface the acceptance rate instead of dropping silently.
+pub(crate) struct StagedFact {
+    pub relationship_type_raw: String,
+    pub payload_json: String,
+}
+
+/// Outcome of one prose extraction run: the validated facts plus the facts
+/// rejected by Rust-side validation (#508). Rejected facts are staged durably
+/// by the hook so a vocabulary gap never silently loses data.
 pub(crate) struct ProseExtractionOutcome {
     pub facts: Vec<NormalizedFact>,
     pub dropped: usize,
+    pub staged: Vec<StagedFact>,
 }
 
 pub(crate) async fn extract_prose_facts(
@@ -89,6 +98,7 @@ pub(crate) async fn extract_prose_facts(
     raw_ref: &str,
     internal_date: Option<DateTime<FixedOffset>>,
     mailbox_address: Option<&str>,
+    predicate_names: &[String],
 ) -> Result<ProseExtractionOutcome, ConnectorError> {
     let envelope = EmailEnvelope::from_message(message, internal_date, mailbox_address);
     if envelope.is_spam {
@@ -96,6 +106,7 @@ pub(crate) async fn extract_prose_facts(
         return Ok(ProseExtractionOutcome {
             facts: Vec::new(),
             dropped: 0,
+            staged: Vec::new(),
         });
     }
 
@@ -111,10 +122,11 @@ pub(crate) async fn extract_prose_facts(
         return Ok(ProseExtractionOutcome {
             facts: Vec::new(),
             dropped: 0,
+            staged: Vec::new(),
         });
     };
 
-    let prompt = build_system_prompt(user_identity);
+    let prompt = build_system_prompt(user_identity, predicate_names);
     // The full envelope — dates, recipients, and the deterministic spam /
     // forwarding / misdirection signals — anchors the model's reading of
     // the prose (issue #398): relative phrases resolve against the Sent
@@ -158,22 +170,33 @@ pub(crate) async fn extract_prose_facts(
     // Propagate LLM/parse failures so the hook runner re-enqueues the
     // instance with backoff instead of recording a silent empty success.
     let assistant = backend
-        .system_chat_message(messages, Some(vec![email_extraction_tool_schema().clone()]))
+        .system_chat_message(
+            messages,
+            Some(vec![email_extraction_tool_schema(predicate_names)]),
+        )
         .await
         .map(|(msg, _usage)| msg)?;
     let output = parse_output(assistant)?;
 
     let mut facts = Vec::with_capacity(output.facts.len());
     let mut dropped = 0usize;
+    let mut staged = Vec::new();
     for fact in output.facts {
-        match build_fact(fact, user_identity, raw_ref) {
+        let relationship_type_raw = fact.relationship_type.clone();
+        let payload_json = serde_json::to_string(&fact)
+            .map_err(|error| ConnectorError::Parse(error.to_string()))?;
+        match build_fact(fact, user_identity, raw_ref, predicate_names) {
             Ok(mut f) => {
                 bind_prose_fact(&mut f, &envelope);
                 facts.push(f);
             }
             Err(error) => {
                 dropped += 1;
-                warn!(raw_ref, "dropping invalid LLM email fact: {error}");
+                staged.push(StagedFact {
+                    relationship_type_raw,
+                    payload_json,
+                });
+                warn!(raw_ref, "staging invalid LLM email fact: {error}");
             }
         }
     }
@@ -183,7 +206,11 @@ pub(crate) async fn extract_prose_facts(
         dropped,
         "LLM email extraction produced facts"
     );
-    Ok(ProseExtractionOutcome { facts, dropped })
+    Ok(ProseExtractionOutcome {
+        facts,
+        dropped,
+        staged,
+    })
 }
 
 /// Cap the body sent to the LLM to bound token cost. 8 KiB of prose is far more

@@ -26,9 +26,10 @@ use crate::routes::{
     kb_heatmap_handler, kb_import_handler, kb_merge_apply_handler, kb_merge_keep_handler,
     kb_merges_handler, kb_optimization_run_now_handler, kb_optimization_status_handler,
     kb_pending_handler, kb_profile_handler, kb_query_handler, kb_reject_fact_handler,
-    kb_show_handler, kb_trash_empty_handler, kb_trash_list_handler, kb_trash_restore_handler,
-    list_categories, memory_handler, memory_refresh_handler, models_handler,
-    session_messages_handler, sessions_handler, show_category, status_handler, stop_handler,
+    kb_show_handler, kb_staged_list_handler, kb_staged_map_handler, kb_staged_reject_handler,
+    kb_trash_empty_handler, kb_trash_list_handler, kb_trash_restore_handler, list_categories,
+    memory_handler, memory_refresh_handler, models_handler, session_messages_handler,
+    sessions_handler, show_category, status_handler, stop_handler,
 };
 use crate::state::AppState;
 
@@ -156,6 +157,18 @@ pub fn build_app(state: Arc<AppState>) -> Router {
         .route(
             "/kb/merges",
             get(kb_merges_handler).layer(from_fn(require_loopback)),
+        )
+        .route(
+            "/kb/staged",
+            get(kb_staged_list_handler).layer(from_fn(require_loopback)),
+        )
+        .route(
+            "/kb/staged/{id}/map",
+            post(kb_staged_map_handler).layer(from_fn(require_loopback)),
+        )
+        .route(
+            "/kb/staged/{id}/reject",
+            post(kb_staged_reject_handler).layer(from_fn(require_loopback)),
         )
         .route(
             "/kb/merges/{id}/apply",

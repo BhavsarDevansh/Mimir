@@ -291,7 +291,7 @@ impl<'a> OptimizationRunner<'a> {
             new_fact.extraction_method = Some(ExtractionMethod::InferenceRule);
             let relationship_type_id = self
                 .kg
-                .ensure_relationship_type(&new_fact.relationship_type)
+                .require_emit_eligible_relationship_type(&new_fact.relationship_type)
                 .await?;
             if fact_already_exists(self.kg, &new_fact, relationship_type_id).await? {
                 continue;

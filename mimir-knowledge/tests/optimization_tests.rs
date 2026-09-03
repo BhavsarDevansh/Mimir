@@ -303,7 +303,7 @@ async fn deterministic_dedup_distinguishes_null_and_empty_literals() {
     let graph = TestGraph::new().await;
     let person = graph.create_person("Devansh").await;
     let null_object_fact = graph
-        .create_fact(person, "knows_about", None, SourceType::Connector)
+        .create_fact(person, "has_partner", None, SourceType::Connector)
         .await;
     let empty_object_fact = insert_unmanaged_fact(
         &graph,
@@ -397,7 +397,7 @@ async fn semantic_dedup_queues_uncertain_llm_candidate() {
         .create_fact(person, "visited", Some(rome), SourceType::Connector)
         .await;
     let fact_b = graph
-        .create_fact(person, "trip_to", Some(rome), SourceType::Import)
+        .create_fact(person, "located_in", Some(rome), SourceType::Import)
         .await;
 
     let args = format!(
@@ -456,10 +456,10 @@ async fn semantic_dedup_preserves_confidence_boosts_across_merges() {
         .create_fact(person, "visited", Some(rome), SourceType::Connector)
         .await;
     let fact_b = graph
-        .create_fact(person, "trip_to", Some(rome), SourceType::Import)
+        .create_fact(person, "located_in", Some(rome), SourceType::Import)
         .await;
     let fact_c = graph
-        .create_fact(person, "travelled_to", Some(rome), SourceType::Import)
+        .create_fact(person, "resides_in", Some(rome), SourceType::Import)
         .await;
 
     for fact_id in [fact_a.id, fact_b.id, fact_c.id] {
@@ -585,7 +585,7 @@ async fn semantic_dedup_sends_strict_json_prompt_to_llm() {
         .create_fact(person, "visited", Some(rome), SourceType::Connector)
         .await;
     graph
-        .create_fact(person, "trip_to", Some(rome), SourceType::Import)
+        .create_fact(person, "located_in", Some(rome), SourceType::Import)
         .await;
 
     let mock = Arc::new(

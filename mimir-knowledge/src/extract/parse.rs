@@ -7,12 +7,12 @@ use mimir_core::llm::types::Message;
 use mimir_core::llm::{ToolOutputParseError, parse_tool_output};
 
 use crate::KnowledgeError;
+use crate::MULTI_VALUED_PREDICATES;
 use crate::extract::schema::{Classification, ExtractedFact, ExtractedLocation, RememberOutput};
 use crate::models::entity::EntityType;
 use crate::models::enums::{EventType, LocationType, RecurrenceType};
 use crate::models::source::{ExtractionMethod, SourceType};
 use crate::normalize::{NormalizedFact, NormalizedLocation};
-use crate::{MULTI_VALUED_PREDICATES, is_favourite_family_predicate};
 
 // ---------------------------------------------------------------------------
 
@@ -75,17 +75,16 @@ pub fn parse_entity_type(s: &str) -> Result<EntityType, KnowledgeError> {
 // ---------------------------------------------------------------------------
 
 /// If a fact has a comma-separated object literal and its predicate is
-/// multi-valued — in the shared [`MULTI_VALUED_PREDICATES`] allow-list, or the
-/// open `favourite_<thing>` family — expand it into multiple
-/// `ExtractedFact`s.
+/// multi-valued in the shared [`MULTI_VALUED_PREDICATES`] allow-list — expand
+/// it into multiple `ExtractedFact`s.
 ///
 /// Splitting is a best-effort pass on simple commas: the prompt already
 /// instructs the model to emit one fact per list item, and the splitter is the
 /// deterministic safety net for crammed lists. Predicates outside the
-/// multi-valued set and the open favourite family pass through untouched.
+/// multi-valued set pass through untouched.
 pub(super) fn split_list_objects(fact: &ExtractedFact) -> Vec<ExtractedFact> {
     let canon = fact.relationship_type.as_str();
-    if !MULTI_VALUED_PREDICATES.contains(&canon) && !is_favourite_family_predicate(canon) {
+    if !MULTI_VALUED_PREDICATES.contains(&canon) {
         return vec![fact.clone()];
     }
     let parts: Vec<&str> = fact.object.split(',').collect();
@@ -357,12 +356,12 @@ mod tests {
     }
 
     #[test]
-    fn split_list_objects_splits_favourite_family() {
+    fn split_list_objects_splits_prefers() {
         let fact = ExtractedFact {
             classification: Classification::Explicit,
             subject: "devansh".to_string(),
             subject_type: "Person".to_string(),
-            relationship_type: "favourite_movie".to_string(),
+            relationship_type: "prefers".to_string(),
             object: "Inception, Interstellar".to_string(),
             object_is_entity: false,
             object_type: None,
@@ -379,6 +378,6 @@ mod tests {
         assert_eq!(split.len(), 2);
         assert_eq!(split[0].object, "Inception");
         assert_eq!(split[1].object, "Interstellar");
-        assert_eq!(split[0].relationship_type, "favourite_movie");
+        assert_eq!(split[0].relationship_type, "prefers");
     }
 }

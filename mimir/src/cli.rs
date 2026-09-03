@@ -323,6 +323,11 @@ pub enum KbCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Review facts staged for unrecognized relationship predicates.
+    Staged {
+        #[command(subcommand)]
+        command: StagedCommands,
+    },
     /// Confirm a pending sensitive fact.
     Confirm {
         /// Fact ID to confirm.
@@ -360,6 +365,36 @@ pub enum MergeCommands {
     Keep {
         /// Merge queue entry ID.
         id: i64,
+    },
+}
+
+/// Subcommands for the unrecognized-predicate staging review queue.
+#[derive(Subcommand)]
+pub enum StagedCommands {
+    /// List staged facts whose predicates did not resolve.
+    List {
+        /// Output raw JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Map a staged fact to an existing emit-eligible relationship leaf.
+    Map {
+        /// Staged fact ID.
+        id: i64,
+        /// Emit-eligible relationship type ID.
+        #[arg(long)]
+        relationship_type_id: i16,
+        /// Review note.
+        #[arg(long)]
+        note: Option<String>,
+    },
+    /// Reject a staged fact.
+    Reject {
+        /// Staged fact ID.
+        id: i64,
+        /// Review note.
+        #[arg(long)]
+        note: Option<String>,
     },
 }
 

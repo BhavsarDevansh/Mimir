@@ -18,6 +18,13 @@ fn email(from: &str, subject: &str, body: &str) -> Vec<u8> {
     .into_bytes()
 }
 
+fn taxonomy_names() -> Vec<String> {
+    mimir_knowledge::CANONICAL_PREDICATES
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect()
+}
+
 fn mock_with_tool_response(json: &str) -> MockLlmClient {
     let tool_call = mimir_core::llm::ToolCall {
         index: 0,
@@ -145,10 +152,18 @@ async fn spam_email_skips_llm_call_entirely() {
         "Sale ends Sunday",
     );
     let msg = parse(&bytes);
-    let facts = extract_prose_facts(&backend, Some("Devansh"), &msg, "17:1", None, None)
-        .await
-        .expect("spam -> empty facts")
-        .facts;
+    let facts = extract_prose_facts(
+        &backend,
+        Some("Devansh"),
+        &msg,
+        "17:1",
+        None,
+        None,
+        &taxonomy_names(),
+    )
+    .await
+    .expect("spam -> empty facts")
+    .facts;
     assert!(facts.is_empty());
     // No LLM call was made (the mock would error with no queued response
     // if the call had been issued, and system_chat_calls stays empty).
@@ -165,10 +180,18 @@ async fn no_fact_email_yields_empty_facts_array() {
         "Here are this week's links.",
     );
     let msg = parse(&bytes);
-    let facts = extract_prose_facts(&backend, Some("Devansh"), &msg, "17:2", None, None)
-        .await
-        .expect("no-fact -> empty facts")
-        .facts;
+    let facts = extract_prose_facts(
+        &backend,
+        Some("Devansh"),
+        &msg,
+        "17:2",
+        None,
+        None,
+        &taxonomy_names(),
+    )
+    .await
+    .expect("no-fact -> empty facts")
+    .facts;
     assert!(facts.is_empty());
     // The call routed through the system queue, not the user queue.
     assert_eq!(mock.system_chat_calls().len(), 1);
@@ -196,10 +219,18 @@ async fn dentist_appointment_produces_typed_fact() {
         "See you Tuesday 3pm. Please arrive 10 minutes early.",
     );
     let msg = parse(&bytes);
-    let facts = extract_prose_facts(&backend, Some("Devansh"), &msg, "17:42", None, None)
-        .await
-        .expect("typed fact")
-        .facts;
+    let facts = extract_prose_facts(
+        &backend,
+        Some("Devansh"),
+        &msg,
+        "17:42",
+        None,
+        None,
+        &taxonomy_names(),
+    )
+    .await
+    .expect("typed fact")
+    .facts;
     assert_eq!(facts.len(), 1, "{facts:?}");
     let f = &facts[0];
     assert_eq!(f.subject, "Devansh", "subject canonicalised to identity");
@@ -229,10 +260,18 @@ async fn invalid_event_type_hint_is_dropped_not_trusted() {
     let backend: Arc<dyn LlmBackend> = mock.clone();
     let bytes = email("a@example.com", "Hi", "body");
     let msg = parse(&bytes);
-    let facts = extract_prose_facts(&backend, Some("Devansh"), &msg, "17:3", None, None)
-        .await
-        .expect("dropped event_type")
-        .facts;
+    let facts = extract_prose_facts(
+        &backend,
+        Some("Devansh"),
+        &msg,
+        "17:3",
+        None,
+        None,
+        &taxonomy_names(),
+    )
+    .await
+    .expect("dropped event_type")
+    .facts;
     assert_eq!(facts.len(), 1);
     assert_eq!(facts[0].event_type, None, "unrecognised event_type dropped");
     assert_eq!(mock.system_chat_calls().len(), 1);
@@ -252,7 +291,7 @@ async fn invalid_subject_type_drops_the_fact() {
     let backend: Arc<dyn LlmBackend> = mock.clone();
     let bytes = email("a@example.com", "Hi", "body");
     let msg = parse(&bytes);
-    let facts = extract_prose_facts(&backend, None, &msg, "17:4", None, None)
+    let facts = extract_prose_facts(&backend, None, &msg, "17:4", None, None, &taxonomy_names())
         .await
         .expect("dropped subject_type")
         .facts;
@@ -266,7 +305,16 @@ async fn unparseable_llm_output_is_a_retryable_error() {
     let backend: Arc<dyn LlmBackend> = mock.clone();
     let bytes = email("a@example.com", "Hi", "body");
     let msg = parse(&bytes);
-    let result = extract_prose_facts(&backend, Some("Devansh"), &msg, "17:5", None, None).await;
+    let result = extract_prose_facts(
+        &backend,
+        Some("Devansh"),
+        &msg,
+        "17:5",
+        None,
+        None,
+        &taxonomy_names(),
+    )
+    .await;
     assert!(
         result.is_err(),
         "unparseable LLM output must not be a silent empty success"
@@ -285,7 +333,16 @@ async fn llm_backend_error_is_a_retryable_error() {
     let backend: Arc<dyn LlmBackend> = mock.clone();
     let bytes = email("a@example.com", "Hi", "body");
     let msg = parse(&bytes);
-    let result = extract_prose_facts(&backend, Some("Devansh"), &msg, "17:6", None, None).await;
+    let result = extract_prose_facts(
+        &backend,
+        Some("Devansh"),
+        &msg,
+        "17:6",
+        None,
+        None,
+        &taxonomy_names(),
+    )
+    .await;
     assert!(result.is_err());
 }
 
@@ -297,7 +354,7 @@ fn system_prompt_lists_the_full_canonical_predicate_vocabulary() {
     // The prompt must list every canonical predicate, and every listed
     // predicate must be accepted by the Rust validator so the prompt and
     // the validator cannot drift apart.
-    let prompt = build_system_prompt(Some("Devansh"));
+    let prompt = build_system_prompt(Some("Devansh"), &taxonomy_names());
     for predicate in mimir_knowledge::CANONICAL_PREDICATES {
         assert!(
             prompt.contains(predicate),
@@ -314,11 +371,11 @@ fn system_prompt_lists_the_full_canonical_predicate_vocabulary() {
 
 #[test]
 fn relationship_type_schema_points_at_the_vocabulary() {
-    // The wire schema must not contradict the prompt: the field description
-    // states that only canonical predicates are accepted and that anything
-    // else is dropped, so a model reading the schema cannot assume open
-    // predicates survive (issue #508).
-    let schema = email_extraction_tool_schema();
+    // The wire schema must be closed, not merely advisory: the model receives
+    // the DB taxonomy as an enum and cannot name an unrecognized predicate
+    // without violating the tool contract (issue #468).
+    let schema =
+        email_extraction_tool_schema(&["has_appointment".to_string(), "likes".to_string()]);
     let description = schema["function"]["parameters"]["properties"]["facts"]
         ["items"]["properties"]["relationship_type"]["description"]
         .as_str()
@@ -328,8 +385,19 @@ fn relationship_type_schema_points_at_the_vocabulary() {
         "schema must point the model at the canonical vocabulary: {description}"
     );
     assert!(
-        description.contains("dropped"),
-        "schema must warn that non-canonical predicates are dropped: {description}"
+        description.contains("staged"),
+        "schema must warn that non-canonical predicates are staged: {description}"
+    );
+    let relationship_type = &schema["function"]["parameters"]["properties"]["facts"]["items"]["properties"]
+        ["relationship_type"];
+    assert_eq!(
+        relationship_type["enum"]
+            .as_array()
+            .expect("closed enum")
+            .iter()
+            .map(serde_json::Value::as_str)
+            .collect::<Vec<_>>(),
+        vec![Some("has_appointment"), Some("likes")]
     );
 }
 
@@ -347,9 +415,54 @@ async fn extract_prose_facts_reports_the_dropped_fact_count() {
     let backend: Arc<dyn LlmBackend> = mock.clone();
     let bytes = email("a@example.com", "Hi", "body");
     let msg = parse(&bytes);
-    let outcome = extract_prose_facts(&backend, Some("Devansh"), &msg, "17:8", None, None)
-        .await
-        .expect("extraction");
+    let outcome = extract_prose_facts(
+        &backend,
+        Some("Devansh"),
+        &msg,
+        "17:8",
+        None,
+        None,
+        &taxonomy_names(),
+    )
+    .await
+    .expect("extraction");
     assert_eq!(outcome.facts.len(), 1, "canonical fact kept");
     assert_eq!(outcome.dropped, 1, "non-canonical fact counted as dropped");
+}
+
+#[tokio::test]
+async fn invalid_facts_are_staged_not_lost() {
+    let mock = Arc::new(mock_with_tool_response(
+        r#"{"facts": [
+                {"subject": "the user", "subject_type": "Person", "relationship_type": "has_appointment", "object": "Dentist", "object_is_entity": true, "object_type": "Event"},
+                {"subject": "the user", "subject_type": "Person", "relationship_type": "owes", "object": "the bank", "object_is_entity": false}
+        ]}"#,
+    ));
+    let backend: Arc<dyn LlmBackend> = mock.clone();
+    let bytes = email("a@example.com", "Hi", "body");
+    let msg = parse(&bytes);
+    let outcome = extract_prose_facts(
+        &backend,
+        Some("Devansh"),
+        &msg,
+        "17:8",
+        None,
+        None,
+        &taxonomy_names(),
+    )
+    .await
+    .expect("extraction");
+    assert_eq!(outcome.facts.len(), 1, "canonical fact kept");
+    assert_eq!(outcome.dropped, 1, "invalid fact counted");
+    assert_eq!(outcome.staged.len(), 1, "invalid fact staged");
+    assert_eq!(outcome.staged[0].relationship_type_raw, "owes");
+}
+
+#[tokio::test]
+async fn email_schema_exposes_category_ids() {
+    let schema = email_extraction_tool_schema(&["likes".to_string()]);
+    let category_ids = &schema["function"]["parameters"]["properties"]["facts"]["items"]["properties"]
+        ["category_ids"];
+    assert_eq!(category_ids["type"], "array");
+    assert_eq!(category_ids["items"]["type"], "integer");
 }

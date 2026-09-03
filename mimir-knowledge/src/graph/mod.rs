@@ -28,8 +28,9 @@ mod predicates;
 mod preferences;
 mod relationships;
 mod sources;
+mod taxonomy;
+pub use taxonomy::{UnrecognizedFact, UnrecognizedFactStage};
 
-pub(crate) use predicates::is_favourite_family_predicate;
 pub use predicates::{
     CANONICAL_PREDICATES, CONNECTOR_EMITTED_PREDICATES, MULTI_VALUED_PREDICATES,
     is_canonical_predicate_name,

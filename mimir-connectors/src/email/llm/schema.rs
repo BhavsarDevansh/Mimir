@@ -16,7 +16,7 @@ pub(super) const EMAIL_EXTRACTION_TOOL_NAME: &str = "extract_email_facts";
 /// [`mimir_knowledge::extract::ExtractedFact`] minus the conversational-only
 /// fields (`classification`, `correction_scope`), plus an optional
 /// `event_type` hint that Rust maps onto [`NormalizedFact::event_type`].
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub(super) struct EmailFact {
     pub(super) subject: String,
     pub(super) subject_type: String,
@@ -39,6 +39,8 @@ pub(super) struct EmailFact {
     #[serde(default)]
     pub(super) is_sensitive: bool,
     #[serde(default)]
+    pub(super) category_ids: Vec<i32>,
+    #[serde(default)]
     pub(super) location: Option<ExtractedLocation>,
 }
 
@@ -53,7 +55,7 @@ pub(super) struct EmailFactOutput {
 /// email extraction call (issue #259). The schema is static — there is no
 /// per-call input — so rebuilding it per email was a steady stream of
 /// identical allocations during a long sync.
-static EMAIL_EXTRACTION_TOOL_SCHEMA: LazyLock<serde_json::Value> = LazyLock::new(|| {
+static EMAIL_EXTRACTION_TOOL_TEMPLATE: LazyLock<serde_json::Value> = LazyLock::new(|| {
     serde_json::json!({
         "type": "function",
         "function": {
@@ -78,7 +80,7 @@ static EMAIL_EXTRACTION_TOOL_SCHEMA: LazyLock<serde_json::Value> = LazyLock::new
                                 },
                                 "relationship_type": {
                                     "type": "string",
-                                    "description": "The relationship or property being asserted. Must be one of the canonical predicates listed in the system prompt (the full vocabulary is listed there); a fact with any other predicate is dropped."
+                                    "description": "The relationship or property being asserted. Must be one of the canonical predicates listed in the system prompt (the full vocabulary is listed there); a fact with any other predicate is staged for review."
                                 },
                                 "object": {
                                     "type": "string",
@@ -118,6 +120,11 @@ static EMAIL_EXTRACTION_TOOL_SCHEMA: LazyLock<serde_json::Value> = LazyLock::new
                                     "type": "boolean",
                                     "description": "Whether this fact involves health, financial, relationship, or other sensitive topics."
                                 },
+                                "category_ids": {
+                                    "type": "array",
+                                    "items": { "type": "integer" },
+                                    "description": "Dewey Decimal category IDs from the Categorisation Guide that best describe this fact. Rust validates IDs and supplies a taxonomy fallback when none are valid."
+                                },
                                 "location": {
                                     "type": "object",
                                     "description": "Optional. Present only for 'where' facts.",
@@ -141,34 +148,28 @@ static EMAIL_EXTRACTION_TOOL_SCHEMA: LazyLock<serde_json::Value> = LazyLock::new
     })
 });
 
-pub(super) fn email_extraction_tool_schema() -> &'static serde_json::Value {
-    &EMAIL_EXTRACTION_TOOL_SCHEMA
+pub(super) fn email_extraction_tool_schema(predicate_names: &[String]) -> serde_json::Value {
+    let mut schema = EMAIL_EXTRACTION_TOOL_TEMPLATE.clone();
+    let relationship_type = &mut schema["function"]["parameters"]["properties"]["facts"]["items"]["properties"]
+        ["relationship_type"];
+    relationship_type["enum"] = serde_json::Value::Array(
+        predicate_names
+            .iter()
+            .map(|name| serde_json::Value::String(name.clone()))
+            .collect(),
+    );
+    schema
 }
 
-/// The canonical relationship-type vocabulary the model must stay within
-/// (issue #508), rendered from the same
-/// [`mimir_knowledge::CANONICAL_PREDICATES`] const the Rust validator
-/// checks, so the prompt and the validator cannot drift apart. The open
-/// `favourite_<thing>` family is accepted too, mirroring
-/// [`mimir_knowledge::is_canonical_predicate_name`].
-pub(super) fn predicate_vocabulary() -> &'static str {
-    PREDICATE_VOCABULARY.as_str()
-}
-
-/// The rendered vocabulary, built once (issue #508): the string is identical
-/// for every email, so rebuilding it per extraction would be a steady stream
-/// of identical allocations during a long sync (mirroring the static tool
-/// schema above).
-static PREDICATE_VOCABULARY: LazyLock<String> = LazyLock::new(|| {
-    format!(
-        "{}\n(plus the open favourite_<thing> family)",
-        mimir_knowledge::CANONICAL_PREDICATES.join(", ")
-    )
-});
-
-pub(super) fn build_system_prompt(user_identity: Option<&str>) -> String {
+/// The controlled relationship-type vocabulary the model must stay within,
+/// rendered from the DB-derived emit-eligible leaf list also used by the Rust
+/// validator, so the prompt and the validator cannot drift apart.
+pub(super) fn build_system_prompt(
+    user_identity: Option<&str>,
+    predicate_names: &[String],
+) -> String {
     let owner = user_identity.unwrap_or("the mailbox owner");
-    let vocabulary = predicate_vocabulary();
+    let vocabulary = predicate_names.join(", ");
     format!(
         "You are Mimir's email fact extractor. Read the provided email and \
 extract the real-world facts it conveys about {owner} — appointments, flights, \
@@ -179,9 +180,8 @@ facts). If the email is marketing, a newsletter, or carries no real-world \
 facts about {owner}, return an empty facts array. For facts about {owner}, \
 use the exact name '{owner}' as the subject. Emit the facts via the \
 extract_email_facts tool.\n\n\
-Predicate vocabulary: the relationship_type of every fact must be one of the \
-canonical predicates listed below (or a favourite_<thing> form). A fact whose \
-predicate is not in this vocabulary is dropped and never reaches the \
-knowledge graph:\n{vocabulary}"
+Predicate vocabulary: the relationship_type enum in the extraction tool is \
+closed. A fact whose predicate is not in this vocabulary is staged for review \
+and never reaches the knowledge graph:\n{vocabulary}"
     )
 }

@@ -50,7 +50,20 @@ async fn add_fact(
         parent_fact_ids: Vec::new(),
         category_ids: Vec::new(),
     };
-    tg.kg.insert_fact(new_fact).await.unwrap().id
+    let relationship_type_id = tg.kg.ensure_relationship_type(predicate).await.unwrap();
+    let canonical_name = tg.kg.relationship_type_name(relationship_type_id).await;
+    let mut new_fact = new_fact;
+    new_fact.relationship_type = canonical_name.unwrap_or_else(|| predicate.to_string());
+    mimir_knowledge::queries::fact::insert_fact(
+        tg.kg.pool(),
+        &new_fact,
+        relationship_type_id,
+        confidence,
+        Utc::now(),
+    )
+    .await
+    .unwrap()
+    .id
 }
 
 /// Ensure a relationship type exists and return its id.
@@ -368,7 +381,18 @@ async fn subtree_preserves_temporal_bounds_in_output() {
         parent_fact_ids: Vec::new(),
         category_ids: Vec::new(),
     };
-    tg.kg.insert_fact(new_fact).await.unwrap();
+    let canonical_name = tg.kg.relationship_type_name(studied_at).await;
+    let mut new_fact = new_fact;
+    new_fact.relationship_type = canonical_name.unwrap_or_default();
+    mimir_knowledge::queries::fact::insert_fact(
+        tg.kg.pool(),
+        &new_fact,
+        studied_at,
+        0.80,
+        Utc::now(),
+    )
+    .await
+    .unwrap();
 
     let facts = get_facts_by_relationship_subtree(tg.kg.pool(), alice, education, 0.0, 50)
         .await

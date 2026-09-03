@@ -9,8 +9,8 @@ use mimir_core::llm::types::Message;
 
 use crate::extract::parse::{parse_extracted_fact, parse_remember_output, split_list_objects};
 use crate::extract::prompt::{build_base_prompt, build_extraction_prompt};
+use crate::extract::remember_tool_schema;
 use crate::extract::schema::{ExtractedFact, RememberOutput};
-use crate::extract::tool::remember_tool_schema;
 use crate::models::source::ExtractionMethod;
 use crate::normalize::{ExtractionOutcome, NormalizedFact, Provenance, normalize_and_insert};
 use crate::{KnowledgeError, KnowledgeGraph};
@@ -31,10 +31,11 @@ pub async fn extract_facts(
     user_message: &str,
 ) -> Result<ExtractionOutcome, KnowledgeError> {
     let prompt = build_base_prompt(kg).await?;
+    let predicate_names = kg.list_emit_eligible_relationship_type_names().await?;
     let messages = vec![Message::system(prompt), Message::user(user_message)];
 
     let (assistant_msg, _usage) = llm
-        .chat_message(messages, Some(vec![remember_tool_schema().clone()]))
+        .chat_message(messages, Some(vec![remember_tool_schema(&predicate_names)]))
         .await
         .map_err(|e| KnowledgeError::Validation(format!("LLM call failed: {}", e)))?;
 
@@ -56,6 +57,7 @@ pub async fn extract_facts_with_context(
     condensed_memory: Option<&str>,
 ) -> Result<ExtractionOutcome, KnowledgeError> {
     let prompt = build_extraction_prompt(kg, condensed_memory, messages).await?;
+    let predicate_names = kg.list_emit_eligible_relationship_type_names().await?;
     // The transcript is embedded in the system prompt above; the user turn is
     // just the action instruction so the LLM is not handed the conversation
     // twice.
@@ -68,7 +70,10 @@ pub async fn extract_facts_with_context(
         ),
     ];
     let (assistant_msg, _usage) = llm
-        .chat_message(llm_messages, Some(vec![remember_tool_schema().clone()]))
+        .chat_message(
+            llm_messages,
+            Some(vec![remember_tool_schema(&predicate_names)]),
+        )
         .await
         .map_err(|e| KnowledgeError::Validation(format!("LLM call failed: {}", e)))?;
 
@@ -111,21 +116,33 @@ async fn extracted_to_normalized(
     let mut errors = Vec::new();
 
     for mut fact in facts {
-        // Canonicalise the predicate once: `resolve_canonical_relationship_type`
-        // enforces the Rust-side allow-list (issue #401) — seeded predicates
-        // and their aliases resolve to the canonical id, the prompt-instructed
-        // `favourite_*` family is accepted, and any other predicate is rejected
-        // with a clear error instead of auto-creating a `relationship_types`
-        // row. The canonical name drives list-splitting below.
-        // `normalize_and_insert` re-resolves the id (idempotently) through the
-        // permissive shared boundary, so the strict check above is not
-        // repeated downstream.
+        // Canonicalise the predicate once: the DB-backed resolver accepts only
+        // an emit-eligible leaf (or controlled alias). Unrecognized predicates
+        // are staged instead of auto-creating a row. The canonical name drives
+        // list-splitting below, and `normalize_and_insert` re-resolves the id
+        // idempotently at the shared ingestion boundary.
         let relationship_type_id = match kg
             .resolve_canonical_relationship_type(&fact.relationship_type)
             .await
         {
             Ok(id) => id,
             Err(error) => {
+                let payload_json = serde_json::to_string(&fact).unwrap_or_else(|_| {
+                    format!(r#"{{"relationship_type":{:?}}}"#, fact.relationship_type)
+                });
+                if let Err(stage_error) = kg
+                    .stage_unrecognized_fact(
+                        None,
+                        None,
+                        &fact.relationship_type,
+                        &payload_json,
+                        None,
+                    )
+                    .await
+                {
+                    errors.push(stage_error);
+                    continue;
+                }
                 errors.push(error);
                 continue;
             }

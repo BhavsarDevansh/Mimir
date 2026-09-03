@@ -5,11 +5,11 @@ use chrono::{DateTime, Utc};
 use sqlx::SqlitePool;
 
 use crate::KnowledgeError;
+use crate::MULTI_VALUED_PREDICATES;
 use crate::models::audit_log::{ChangeType, ChangedBy};
 use crate::models::enums::RelationType;
 use crate::models::fact::{Fact, NewFact};
 use crate::models::source::{ExtractionMethod, SourceType};
-use crate::{MULTI_VALUED_PREDICATES, is_favourite_family_predicate};
 
 // ---------------------------------------------------------------------------
 // Corroboration constants (#79)
@@ -97,8 +97,7 @@ pub(super) async fn overlapping_facts_in_tx(
     relationship_type_id: i16,
     relationship_type_name: &str,
 ) -> Result<Vec<Fact>, KnowledgeError> {
-    let is_multi_valued = MULTI_VALUED_PREDICATES.contains(&relationship_type_name)
-        || is_favourite_family_predicate(relationship_type_name);
+    let is_multi_valued = MULTI_VALUED_PREDICATES.contains(&relationship_type_name);
     sqlx::query_as::<_, Fact>(
         "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
@@ -409,7 +408,7 @@ mod tests {
             .await
             .unwrap()
             .id;
-        let predicate = kg.ensure_relationship_type("likes").await.unwrap();
+        let predicate = kg.ensure_relationship_type("prefers").await.unwrap();
         let memory_priority_id: i16 =
             sqlx::query_scalar("SELECT id FROM memory_priorities WHERE name = 'Normal'")
                 .fetch_one(kg.pool())
@@ -457,7 +456,7 @@ mod tests {
 
         let new_fact = NewFact {
             subject_id: subject,
-            relationship_type: "likes".to_string(),
+            relationship_type: "prefers".to_string(),
             object_id: Some(object_one),
             object_literal: None,
             valid_from: seeds[2].valid_from,
@@ -474,7 +473,7 @@ mod tests {
             category_ids: Vec::new(),
         };
 
-        let overlaps = overlapping_facts_in_tx(&mut tx, &new_fact, predicate, "likes")
+        let overlaps = overlapping_facts_in_tx(&mut tx, &new_fact, predicate, "prefers")
             .await
             .unwrap();
 

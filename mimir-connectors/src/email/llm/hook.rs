@@ -105,6 +105,20 @@ impl HookHandler for EmailExtractionHook {
             );
             return HookOutcome::TerminalFailure;
         };
+        let predicate_names = payload
+            .kg
+            .list_emit_eligible_relationship_type_names()
+            .await
+            .map_err(|error| {
+                warn!(
+                    raw_ref = %payload.raw_ref,
+                    "loading closed taxonomy for email extraction failed: {error}"
+                );
+                error.to_string()
+            });
+        let Ok(predicate_names) = predicate_names else {
+            return terminal_or_retry(payload, ctx, "closed taxonomy unavailable".to_string());
+        };
         match extract_prose_facts(
             &payload.llm,
             payload.user_identity.as_deref(),
@@ -112,19 +126,47 @@ impl HookHandler for EmailExtractionHook {
             &payload.raw_ref,
             payload.internal_date,
             payload.mailbox_address.as_deref(),
+            &predicate_names,
         )
         .await
         {
             Ok(outcome) => {
-                let accepted = outcome.facts.len() as i64;
                 let dropped = outcome.dropped as i64;
                 let provenance = Provenance::connector(
                     payload.instance_id,
                     payload.connector_type,
                     ExtractionMethod::LlmExtraction,
                 );
+                for staged_fact in &outcome.staged {
+                    if let Err(error) = payload
+                        .kg
+                        .stage_unrecognized_fact(
+                            Some(payload.instance_id),
+                            Some(&payload.raw_ref),
+                            &staged_fact.relationship_type_raw,
+                            &staged_fact.payload_json,
+                            None,
+                        )
+                        .await
+                    {
+                        warn!(
+                            raw_ref = %payload.raw_ref,
+                            "staging unrecognized email fact failed: {error}"
+                        );
+                        return terminal_or_retry(
+                            payload,
+                            ctx,
+                            format!("failed to stage unrecognized fact: {error}"),
+                        );
+                    }
+                }
+
                 match normalize_and_insert(&payload.kg, outcome.facts, provenance).await {
                     Ok(insert_outcome) => {
+                        let accepted = (insert_outcome.inserted.len()
+                            + insert_outcome.pending_confirmation.len())
+                            as i64;
+                        let dropped = dropped + insert_outcome.errors.len() as i64;
                         if dropped > 0 {
                             let total = accepted + dropped;
                             warn!(
@@ -150,6 +192,7 @@ impl HookHandler for EmailExtractionHook {
                                     payload.instance_id,
                                     accepted,
                                     dropped,
+                                    0,
                                 )
                                 .await
                         {

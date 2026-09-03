@@ -31,7 +31,7 @@ Implemented in `mimir-knowledge/src/queries/memory/`.
 - **Temporal boost** increases score for upcoming events (birthdays, appointments) based on proximity
 - **Priority** (`memory_priority_id`) gives critical facts a 2× multiplier
 - **Centrality** boosts facts about well-connected entities (people mentioned often)
-- **Fill algorithm**: Sort by score descending, greedily fill the character budget, truncate last entry with `…` if exceeded
+- **Fill algorithm**: Sort by score descending, greedily fill the character budget, truncate the last entry with `…` if its object fits; skip a fact when its fixed text already consumes the remaining budget
 
 ### Memory Buckets
 
@@ -61,6 +61,10 @@ The hook's idle gate ensures condensation only runs when the shared LLM worker p
 ### Context Injection
 
 The condensed-memory system prompt is composed at session creation for non-incognito sessions, combined with an upcoming events section, and reused for the session's lifetime; incognito requests build a fresh prompt per request. The prompt phrasing is "Core facts about the user (condensed subset — not a complete picture; treat as starting context, not exhaustive)", signalling to the LLM that the subset is curated and it should use KG tools if it needs more. At composition time, the prompt starts with a single `Now:` line in RFC 3339 UTC plus weekday/date prose (for example, `Now: 2026-08-23T21:30:00Z (Sunday 23 August 2026)`). The anchor is request-local: native and OpenAI-compatible turns refresh that one line for existing sessions, while `/memory` composes it on every read; the condensation cache itself remains timestamp-free.
+
+### Temporal Rendering
+
+Deterministic fact lines append known temporal bounds in ISO 8601 UTC so the LLM can distinguish past, present, and future facts without relying on prose conventions. A fact with only `valid_from` renders as `Devansh has an event Property Check-In (2025-07-16T00:00:00Z → ...)`, a bounded interval includes both values, and an atemporal fact has no bounds suffix. The upcoming section uses the same ISO bound policy alongside its human-friendly date and relative-time suffix, and the character-budget estimate accounts for the extra bounds.
 
 ## Configuration
 

@@ -29,6 +29,8 @@ All tools implement the `mimir_core::Tool` trait and are registered in the serve
 }
 ```
 
+`kg_search` returns each fact's `valid_from` and `valid_until` as RFC 3339 UTC values when present, matching the temporal context supplied by `kg_query`.
+
 ### `kg_related`
 
 ```json
@@ -89,7 +91,7 @@ Stop conditions: `depth >= max_depth`, `visited.len() >= max_nodes`, or empty fr
 2. FTS5 `MATCH` against `entity_fts`, joined to `entities` and `entity_types`.
 3. Optional `entity_type_id` filter.
 4. SQL `ORDER BY rank LIMIT ?`.
-5. Batch-fetch facts for all matched entities in a single query, then group in Rust to top 5 per entity.
+5. Batch-fetch facts for all matched entities in a single query, then group in Rust to top 5 per entity. The fact batch carries `valid_from` / `valid_until` so search results match `kg_query`'s temporal contract.
 
 ## Security
 

@@ -53,6 +53,7 @@ async fn memory_ranking_builds_schema_and_buckets_facts() {
     upcoming.object_literal = Some("Dentist".to_string());
     upcoming.confidence = Some(0.80);
     upcoming.valid_from = Some(clock.now() + chrono::Duration::days(5));
+    upcoming.valid_until = Some(clock.now() + chrono::Duration::days(6));
     upcoming.source_type = SourceType::UserEdit;
     upcoming.category_ids = vec![930];
     kg.insert_fact(upcoming).await.unwrap();
@@ -97,6 +98,20 @@ async fn memory_ranking_builds_schema_and_buckets_facts() {
             .upcoming
             .iter()
             .any(|f| f.relationship_type == "has_appointment")
+    );
+
+    let upcoming_fact = schema
+        .upcoming
+        .iter()
+        .find(|f| f.relationship_type == "has_appointment")
+        .unwrap();
+    assert_eq!(
+        upcoming_fact.valid_from,
+        Some(clock.now() + chrono::Duration::days(5))
+    );
+    assert_eq!(
+        upcoming_fact.valid_until,
+        Some(clock.now() + chrono::Duration::days(6))
     );
 }
 

@@ -35,6 +35,7 @@ struct RawRankedFact {
     object_literal: Option<String>,
     confidence: f32,
     valid_from: Option<DateTime<Utc>>,
+    valid_until: Option<DateTime<Utc>>,
     category_ids: Option<String>, // comma-separated
     memory_weight: Option<f32>,
     memory_bucket_id: Option<i16>,

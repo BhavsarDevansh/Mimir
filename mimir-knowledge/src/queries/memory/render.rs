@@ -1,6 +1,6 @@
 //! Deterministic text rendering of a memory schema and the upcoming section.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 use sqlx::SqlitePool;
 
 use crate::KnowledgeError;
@@ -87,7 +87,7 @@ fn render_bucket(out: &mut String, header: &str, facts: &[RankedFact]) {
 
 pub(super) fn render_fact_line(fact: &RankedFact) -> String {
     let rel = &fact.relationship_type;
-    match rel.as_str() {
+    let prose = match rel.as_str() {
         "has_partner" => format!(
             "{} is partnered with {}",
             fact.subject_name, fact.object_display
@@ -154,7 +154,49 @@ pub(super) fn render_fact_line(fact: &RankedFact) -> String {
             rel.replace('_', " "),
             fact.object_display
         ),
+    };
+
+    format!(
+        "{}{}",
+        prose,
+        format_temporal_bounds(fact.valid_from, fact.valid_until)
+    )
+}
+
+/// Append the fact's known validity bounds as ISO 8601 UTC text.
+pub(super) fn format_temporal_bounds(
+    valid_from: Option<DateTime<Utc>>,
+    valid_until: Option<DateTime<Utc>>,
+) -> String {
+    let bounds = temporal_bounds_value(valid_from, valid_until);
+    if !bounds.is_empty() {
+        format!(" ({bounds})")
+    } else {
+        String::new()
     }
+}
+
+/// Format the validity interval without surrounding punctuation.
+pub(super) fn temporal_bounds_value(
+    valid_from: Option<DateTime<Utc>>,
+    valid_until: Option<DateTime<Utc>>,
+) -> String {
+    let iso = |when: DateTime<Utc>| when.to_rfc3339_opts(SecondsFormat::Secs, true);
+
+    match (valid_from, valid_until) {
+        (Some(from), Some(until)) => format!("{} → {}", iso(from), iso(until)),
+        (Some(from), None) => format!("{} → ...", iso(from)),
+        (None, Some(until)) => format!("→ {}", iso(until)),
+        (None, None) => String::new(),
+    }
+}
+
+/// Byte length of the renderer's temporal-bounds suffix.
+pub(super) fn temporal_bounds_len(
+    valid_from: Option<DateTime<Utc>>,
+    valid_until: Option<DateTime<Utc>>,
+) -> usize {
+    format_temporal_bounds(valid_from, valid_until).len()
 }
 
 // ---------------------------------------------------------------------------
@@ -170,6 +212,7 @@ pub(super) fn render_fact_line(fact: &RankedFact) -> String {
 ///    `trigger_date` falls within the horizon.
 ///
 /// Sorted by occurrence, capped at `limit`. Fresh per request; no LLM.
+/// Each line carries the source fact's known validity bounds in ISO 8601 UTC.
 pub async fn render_upcoming_section(
     pool: &SqlitePool,
     subject_id: i32,
@@ -190,6 +233,7 @@ pub async fn render_upcoming_section(
         object_name: Option<String>,
         object_literal: Option<String>,
         valid_from: Option<DateTime<Utc>>,
+        valid_until: Option<DateTime<Utc>>,
     }
 
     let one_time: Vec<UpcomingFactRow> = sqlx::query_as(
@@ -198,7 +242,8 @@ pub async fn render_upcoming_section(
             rt.name AS relationship_type, \
             COALESCE(o.name, f.object_literal) AS object_name, \
             f.object_literal, \
-            f.valid_from \
+            f.valid_from, \
+            f.valid_until \
          FROM facts f \
          JOIN entities s ON s.id = f.subject_id \
          JOIN relationship_types rt ON rt.id = f.relationship_type_id \
@@ -238,6 +283,7 @@ pub async fn render_upcoming_section(
                     row.object_name.as_deref(),
                     row.object_literal.as_deref(),
                     vf,
+                    row.valid_until,
                     now,
                 ),
             ));
@@ -252,6 +298,7 @@ pub async fn render_upcoming_section(
         object_name: Option<String>,
         object_literal: Option<String>,
         trigger_date: DateTime<Utc>,
+        valid_until: Option<DateTime<Utc>>,
     }
 
     let recurring: Vec<RecurringEventRow> = sqlx::query_as(
@@ -260,7 +307,8 @@ pub async fn render_upcoming_section(
             rt.name AS relationship_type, \
             COALESCE(o.name, f.object_literal) AS object_name, \
             f.object_literal, \
-            e.trigger_date \
+            e.trigger_date, \
+            f.valid_until \
          FROM events e \
          JOIN facts f ON f.id = e.fact_id \
          JOIN entities s ON s.id = f.subject_id \
@@ -295,6 +343,7 @@ pub async fn render_upcoming_section(
                 row.object_name.as_deref(),
                 row.object_literal.as_deref(),
                 row.trigger_date,
+                row.valid_until,
                 now,
             ),
         ));
@@ -312,12 +361,16 @@ pub async fn render_upcoming_section(
 }
 
 /// Format a single upcoming line: `- subject predicate object (DD Month, in N days)`.
+///
+/// The bounds use the shared ISO 8601 UTC format and precede the human-friendly
+/// date and relative-time suffix.
 pub(super) fn format_upcoming_line(
     subject_name: &str,
     relationship_type: &str,
     object_name: Option<&str>,
     object_literal: Option<&str>,
     when: DateTime<Utc>,
+    valid_until: Option<DateTime<Utc>>,
     now: DateTime<Utc>,
 ) -> String {
     let object_display = object_name
@@ -335,11 +388,15 @@ pub(super) fn format_upcoming_line(
     } else {
         format!("in {} days", days)
     };
+    let bounds = temporal_bounds_value(Some(when), valid_until);
+    let bounds_separator = if bounds.is_empty() { "" } else { ", " };
     format!(
-        "- {} {} {} ({}, {})",
+        "- {} {} {} ({}{}{}, {})",
         subject_name,
         rel,
         object_display,
+        bounds,
+        bounds_separator,
         when.format("%d %B"),
         when_str
     )

@@ -1,5 +1,6 @@
 //! FTS5 entity search and top-fact retrieval.
 
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::SqlitePool;
 
@@ -21,6 +22,10 @@ pub struct FactSummary {
     pub predicate: String,
     pub object_name: Option<String>,
     pub object_literal: Option<String>,
+    /// UTC timestamp from which the fact became true.
+    pub valid_from: Option<DateTime<Utc>>,
+    /// UTC timestamp at which the fact stopped being true, if known.
+    pub valid_until: Option<DateTime<Utc>>,
     pub confidence: f32,
 }
 
@@ -86,8 +91,8 @@ pub async fn search_entities(
     // Batch-fetch top-5 facts per matched entity using a window function.
     let placeholders: Vec<&str> = entity_ids.iter().map(|_| "?").collect();
     let facts_sql = format!(
-        "SELECT subject_id, relationship_type_name, object_id, object_literal, confidence FROM ( \
-            SELECT f.subject_id, rt.name as relationship_type_name, f.object_id, f.object_literal, f.confidence, \
+        "SELECT subject_id, relationship_type_name, object_id, object_literal, confidence, valid_from, valid_until FROM ( \
+            SELECT f.subject_id, rt.name as relationship_type_name, f.object_id, f.object_literal, f.confidence, f.valid_from, f.valid_until, \
                    ROW_NUMBER() OVER (PARTITION BY f.subject_id ORDER BY f.confidence DESC) as rn \
              FROM facts f \
              JOIN relationship_types rt ON rt.id = f.relationship_type_id \
@@ -97,9 +102,18 @@ pub async fn search_entities(
          ) WHERE rn <= 5",
         placeholders.join(",")
     );
-    let mut facts_query = sqlx::query_as::<_, (i32, String, Option<i32>, Option<String>, f32)>(
-        sqlx::AssertSqlSafe(&*facts_sql),
-    );
+    let mut facts_query = sqlx::query_as::<
+        _,
+        (
+            i32,
+            String,
+            Option<i32>,
+            Option<String>,
+            f32,
+            Option<DateTime<Utc>>,
+            Option<DateTime<Utc>>,
+        ),
+    >(sqlx::AssertSqlSafe(&*facts_sql));
     for id in &entity_ids {
         facts_query = facts_query.bind(id);
     }
@@ -130,7 +144,16 @@ pub async fn search_entities(
     // Group facts by subject_id and keep top 5 per entity.
     let mut facts_by_subject: std::collections::HashMap<i32, Vec<FactSummary>> =
         std::collections::HashMap::new();
-    for (subject_id, relationship_type_name, object_id, object_literal, confidence) in fact_rows {
+    for (
+        subject_id,
+        relationship_type_name,
+        object_id,
+        object_literal,
+        confidence,
+        valid_from,
+        valid_until,
+    ) in fact_rows
+    {
         let object_name = object_id.and_then(|oid| object_names.get(&oid).cloned());
         facts_by_subject
             .entry(subject_id)
@@ -139,6 +162,8 @@ pub async fn search_entities(
                 predicate: relationship_type_name,
                 object_name,
                 object_literal,
+                valid_from,
+                valid_until,
                 confidence,
             });
     }

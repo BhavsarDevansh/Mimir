@@ -50,7 +50,7 @@ pub async fn build_memory_schema_with_opts(
     opts: BuildMemoryOptions,
 ) -> Result<MemorySchema, KnowledgeError> {
     let mut sql = String::from(
-        "SELECT f.id AS fact_id, s.name AS subject_name, rt.name AS relationship_type, COALESCE(o.name, f.object_literal) AS object_name, f.object_literal, f.confidence, f.valid_from, GROUP_CONCAT(fc.category_id) AS category_ids, MAX(c.memory_weight) AS memory_weight, MIN(c.memory_bucket_id) AS memory_bucket_id, f.memory_priority_id FROM facts f JOIN entities s ON s.id = f.subject_id JOIN relationship_types rt ON rt.id = f.relationship_type_id LEFT JOIN entities o ON o.id = f.object_id LEFT JOIN fact_categories fc ON fc.fact_id = f.id LEFT JOIN categories c ON c.id = fc.category_id WHERE f.subject_id = ? AND f.pending_confirmation = 0 AND f.fact_status_id NOT IN (?, ?) AND f.confidence >= ?",
+        "SELECT f.id AS fact_id, s.name AS subject_name, rt.name AS relationship_type, COALESCE(o.name, f.object_literal) AS object_name, f.object_literal, f.confidence, f.valid_from, f.valid_until, GROUP_CONCAT(fc.category_id) AS category_ids, MAX(c.memory_weight) AS memory_weight, MIN(c.memory_bucket_id) AS memory_bucket_id, f.memory_priority_id FROM facts f JOIN entities s ON s.id = f.subject_id JOIN relationship_types rt ON rt.id = f.relationship_type_id LEFT JOIN entities o ON o.id = f.object_id LEFT JOIN fact_categories fc ON fc.fact_id = f.id LEFT JOIN categories c ON c.id = fc.category_id WHERE f.subject_id = ? AND f.pending_confirmation = 0 AND f.fact_status_id NOT IN (?, ?) AND f.confidence >= ?",
     );
     if opts.exclude_sensitive {
         sql.push_str(" AND rt.sensitive = FALSE");
@@ -95,8 +95,13 @@ pub async fn build_memory_schema_with_opts(
         let object_display = raw
             .object_name
             .unwrap_or_else(|| raw.object_literal.unwrap_or_default());
-        let char_estimate =
-            estimate_chars(&raw.subject_name, &raw.relationship_type, &object_display);
+        let char_estimate = estimate_chars(
+            &raw.subject_name,
+            &raw.relationship_type,
+            &object_display,
+            raw.valid_from,
+            raw.valid_until,
+        );
 
         let bucket = bucket_from_id(raw.memory_bucket_id);
 
@@ -105,6 +110,8 @@ pub async fn build_memory_schema_with_opts(
             subject_name: raw.subject_name,
             relationship_type: raw.relationship_type,
             object_display,
+            valid_from: raw.valid_from,
+            valid_until: raw.valid_until,
             confidence: raw.confidence,
             score,
             temporal_boost,
@@ -171,15 +178,16 @@ pub async fn build_memory_schema_with_opts(
                 _ => schema.general.push(fact),
             }
         } else if consumes_budget && remaining_budget > 0 {
-            // Truncate last entry with …
-            let truncated = truncate_fact(fact, remaining_budget);
-            match truncated.bucket {
-                MemoryBucket::Relationships => schema.relationships.push(truncated),
-                MemoryBucket::Preferences => schema.preferences.push(truncated),
-                MemoryBucket::Upcoming => schema.upcoming.push(truncated),
-                _ => schema.general.push(truncated),
+            // Truncate the last entry when its object fits; skip otherwise.
+            if let Some(truncated) = truncate_fact(fact, remaining_budget) {
+                match truncated.bucket {
+                    MemoryBucket::Relationships => schema.relationships.push(truncated),
+                    MemoryBucket::Preferences => schema.preferences.push(truncated),
+                    MemoryBucket::Upcoming => schema.upcoming.push(truncated),
+                    _ => schema.general.push(truncated),
+                }
+                remaining_budget = 0;
             }
-            remaining_budget = 0;
             continue;
         } else if !consumes_budget {
             // Excluded from budget: always include, never count against budget

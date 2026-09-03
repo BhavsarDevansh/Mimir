@@ -12,7 +12,7 @@ Instead of reading a text file, Mimir:
 
 1. Queries the Knowledge Graph for facts about you
 2. Scores each fact using a weighted formula (confidence, category, recency, priority, centrality)
-3. Selects the top facts that fit within a 2500-character budget. By default, up to 500 facts are considered for the condensation hash
+3. Selects the top facts that fit within a 2500-character budget, truncating the last fact with `…` when only its object does not fit and skipping facts whose fixed text already consumes the remaining budget; by default, up to 500 facts are considered for the condensation hash
 4. Renders them as concise plain text (or sends them to an LLM for condensation)
 5. Caches the result in `system_state` for instant retrieval
 

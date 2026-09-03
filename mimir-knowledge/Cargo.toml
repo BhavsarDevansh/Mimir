@@ -24,6 +24,12 @@ async-trait = "0.1"
 futures = "0.3"
 static_assertions = "1.1"
 uuid = { version = "1.23", features = ["v4", "serde"] }
+tempfile = { version = "3", optional = true }
+
+[features]
+## Off-by-default memory benchmark harness. This keeps fixture generation and
+## quality/performance reporting out of production builds.
+test-benchmark = ["dep:tempfile"]
 
 [dev-dependencies]
 mimir-core = { path = "../mimir-core", features = ["mock-llm"] }
@@ -34,6 +40,11 @@ criterion = { version = "0.8.2", features = ["async_tokio"] }
 [[bench]]
 name = "kg_benchmarks"
 harness = false
+
+[[bench]]
+name = "memory_benchmark"
+harness = false
+required-features = ["test-benchmark"]
 
 [[bench]]
 name = "pure_helpers"

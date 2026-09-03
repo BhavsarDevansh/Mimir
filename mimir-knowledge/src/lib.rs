@@ -4,6 +4,8 @@
 //! Provides entity and fact storage, temporal queries, provenance tracking,
 //! and full-text search via SQLite FTS5.
 
+#[cfg(feature = "test-benchmark")]
+pub mod benchmark;
 pub mod clock;
 pub mod condensation;
 pub mod confidence;

@@ -2,7 +2,9 @@
 
 ## Overview
 
-Criterion `0.8.2` with the `async_tokio` feature is used for all benchmarks. Benchmarks are located in `mimir-core/benches/` and compiled as standalone binaries (`harness = false`).
+Criterion `0.8.2` with the `async_tokio` feature is used for the standard benchmark suites. Those suites live under crate `benches/` directories and are compiled as standalone binaries (`harness = false`).
+
+The deterministic memory benchmark harness (issue #568) lives behind the off-by-default `test-benchmark` feature in `mimir-knowledge`. It reports recall@5, precision@5, provenance accuracy, citation fabrication, temporal correctness, consolidation stability, dedup precision, privacy false-allow/false-block, retrieval latency p95/p99, ingestion throughput, index growth, token output estimate, and wall time. See `docs/memory-benchmark.md` for baseline comparison and budget flags.
 
 ## Design Principles
 

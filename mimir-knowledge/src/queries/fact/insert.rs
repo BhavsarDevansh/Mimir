@@ -107,7 +107,7 @@ pub(super) async fn overlapping_facts_in_tx(
          AND (?7 = 0 OR CASE \
            WHEN ?3 IS NOT NULL THEN object_id = ?3 \
            WHEN ?4 IS NOT NULL THEN object_literal = ?4 \
-         ELSE object_id IS NULL AND object_literal IS NULL \
+        ELSE object_id IS NULL AND object_literal IS NULL \
         END) \
          AND (valid_from IS NULL OR valid_until IS NULL OR valid_from < valid_until) \
          AND (?5 IS NULL OR ?6 IS NULL OR ?5 < ?6) \
@@ -121,7 +121,7 @@ pub(super) async fn overlapping_facts_in_tx(
     .bind(new_fact.valid_from)
     .bind(new_fact.valid_until)
     .bind(is_multi_valued)
-    .fetch_all(&mut **tx)
+        .fetch_all(&mut **tx)
     .await
     .map_err(KnowledgeError::from)
 }
@@ -399,12 +399,12 @@ mod tests {
             .unwrap()
             .id;
         let object_one = kg
-            .create_entity("Chess", EntityType::Activity, &[])
+            .create_entity("Chess", EntityType::Event, &[])
             .await
             .unwrap()
             .id;
         let object_two = kg
-            .create_entity("Rowing", EntityType::Activity, &[])
+            .create_entity("Rowing", EntityType::Event, &[])
             .await
             .unwrap()
             .id;
@@ -483,6 +483,77 @@ mod tests {
                 .iter()
                 .all(|fact| fact.object_id == Some(object_one))
         );
+    }
+
+    #[tokio::test]
+    async fn overlap_query_filters_objects_for_multi_valued_facts() {
+        let dir = tempfile::tempdir().unwrap();
+        let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+            .await
+            .unwrap();
+        let subject = kg
+            .create_entity("Alice", EntityType::Person, &[])
+            .await
+            .unwrap()
+            .id;
+        let object_one = kg
+            .create_entity("Chess", EntityType::Activity, &[])
+            .await
+            .unwrap()
+            .id;
+        let object_two = kg
+            .create_entity("Rowing", EntityType::Activity, &[])
+            .await
+            .unwrap()
+            .id;
+        let predicate = kg.ensure_relationship_type("has_event").await.unwrap();
+        let memory_priority_id: i16 =
+            sqlx::query_scalar("SELECT id FROM memory_priorities WHERE name = 'Normal'")
+                .fetch_one(kg.pool())
+                .await
+                .unwrap();
+        let now = chrono::Utc::now();
+        let mut tx = kg.pool().begin().await.unwrap();
+        for object_id in [object_one, object_two] {
+            seed(
+                &mut tx,
+                &SeedFact {
+                    subject_id: subject,
+                    relationship_type_id: predicate,
+                    memory_priority_id,
+                    now,
+                    object_id,
+                    valid_from: None,
+                    valid_until: None,
+                },
+            )
+            .await
+            .unwrap();
+        }
+        let new_fact = NewFact {
+            subject_id: subject,
+            relationship_type: "has_event".to_string(),
+            object_id: Some(object_one),
+            object_literal: None,
+            valid_from: Some(now),
+            valid_until: None,
+            source_type: SourceType::UserEdit,
+            connector_instance_id: None,
+            connector_type: None,
+            raw_reference: None,
+            extraction_method: None,
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
+        };
+        let overlaps = overlapping_facts_in_tx(&mut tx, &new_fact, predicate, "has_event")
+            .await
+            .unwrap();
+
+        assert_eq!(overlaps.len(), 1);
+        assert_eq!(overlaps[0].object_id, Some(object_one));
     }
 
     #[tokio::test]

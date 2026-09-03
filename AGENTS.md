@@ -19,6 +19,7 @@
 - Ensure **performance and security** are at the forefront of all decisions.
 - Use the **smallest data type needed** for efficient memory utilization. Be smart at initialization (e.g., prefer `u8` over `u16` when sufficient), but do not cast existing values defined by libraries unless absolutely necessary.
 - **Test-only infrastructure lives behind off-by-default `test-*` features** (e.g. `test-mock-oauth`, `test-utils`) so production builds never compile it; a crate's own unit tests may compile such modules via `cfg(test)`, and downstream crates opt in through dev-dependencies.
+- Before memory-semantic changes, run the deterministic memory benchmark harness (`cargo bench -p mimir-knowledge --features test-benchmark --bench memory_benchmark`) and record local quality/performance deltas. See `docs/memory-benchmark.md`.
 
 ## Documentation
 - After each set of changes, create/update technical documentation in `docs/`.

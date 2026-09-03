@@ -1,8 +1,8 @@
 # What Works in Mimir Today
 
-> **Last updated:** 2026-09-02
+> **Last updated:** 2026-09-03
 >
-> **Version:** 0.155.0
+> **Version:** 0.158.0
 >
 > This file is the **feature-level roadmap**: for every feature it records what exists, what is still pending to make it robust, and the GitHub issue tracking each step. The phase-level roadmap lives in `VISION/09-Roadmap/` and the release history in GitHub Releases; this file deliberately does not repeat either.
 
@@ -163,6 +163,7 @@ All client commands talk to the daemon over HTTP except `mimir personality list`
 | Frozen snapshots | ✅ Works | Condensed memory is read from `system_state` once per session; changes don't affect the current chat. The `Now:` anchor is the deliberate exception and is refreshed at request composition time. |
 | Knowledge-graph managed | ✅ Works | Memory is a ranked view of the graph; no `memory.md` file. |
 | Size limit enforcement | ✅ Works | Configurable `char_limit` (default 2,500). |
+| Memory benchmark harness | ✅ Works | Deterministic quality/performance suite behind the off-by-default `test-benchmark` feature; reports recall/precision, provenance, temporal, consolidation, dedup, privacy, latency, throughput, index growth, token estimate, and wall time ([#568](https://github.com/BhavsarDevansh/Mimir/issues/568)). |
 | Pinning / deprioritisation | ❌ Not implemented | No way to force a fact into (or out of) the condensed block ([#284](https://github.com/BhavsarDevansh/Mimir/issues/284)). |
 
 ### Configuration

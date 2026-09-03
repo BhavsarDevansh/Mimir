@@ -85,6 +85,10 @@ schedule_time = "02:00"
 # memory_limit_mb = 2048  # Optional: best-effort cgroup v2 memory cap (MiB)
 ```
 
+## Testing
+
+The scheduler and queue tests use cancellation tokens, explicit start signals, and bounded timeouts instead of polling loops or long sleeps so the assertions follow the actual dispatch and cancellation lifecycle. Scheduler timing stays on the production wall-clock path because jobs run on dedicated threads; this avoids coupling those tests to Tokio's paused-time clock.
+
 ## Integration
 
 The daemon initialises the scheduler in `AppState::from_config_with_llm`, registers the `knowledge.optimization` job in the durable `JobQueue` with the configured `cpu_cores`/`nice_level`/`memory_limit_mb` resource limits, and starts the dispatch loop in `start_server_with_llm_and_listener`. Memory condensation is now a hook (issue #386): the KG dirty notify path triggers `Trigger::FactInserted`, and the `memory.condensation` hook (global `SingularLastWins`, idle-gated) runs the condenser through the hooks engine's dispatch loop.

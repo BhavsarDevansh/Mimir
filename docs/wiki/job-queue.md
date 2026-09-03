@@ -52,6 +52,8 @@ Triggers memory condensation immediately, bypassing the hook's debounce and cool
 
 When Mimir shuts down, any background job that is still running is asked to stop. Jobs that cooperate with the cancellation signal finish their current step cleanly and exit. Cancellation is best-effort: the signal only asks the job to stop, and the job's thread is neither aborted nor joined, so synchronous or blocking work can keep running until it finishes. The run is recorded as `cancelled` in the job history, so `mimir kb optimization --status` shows what happened.
 
+Automated tests exercise the same start and cancellation signals rather than relying on fixed waits, which keeps CI reliable without changing the behavior of background jobs.
+
 ## Resource limits
 
 The nightly optimization job runs with the resource limits from `[knowledge.optimization]` in `config.toml`: `cpu_cores` (how many CPUs it may use, Linux), `nice_level` (a signed Unix priority value: positive values lower scheduling priority, negative values raise it and may require additional privileges), and the optional `memory_limit_mb` (a best-effort memory cap on Linux systems with a writable cgroup v2 setup). The memory cap applies to the whole Mimir process while the job runs, not just the job's thread. These limits are best-effort — if your system cannot apply one, Mimir logs it and runs the job anyway.

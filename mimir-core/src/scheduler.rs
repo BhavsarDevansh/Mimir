@@ -322,32 +322,37 @@ mod tests {
     use crate::job_queue::{Job, JobContext, JobPriority, JobRunStatus};
     use crate::llm::MockLlmClient;
     use std::time::Duration;
+    use tokio::sync::Notify;
+    use tokio::time::timeout;
 
-    async fn test_job_queue() -> (Arc<JobQueue>, tempfile::TempDir) {
+    async fn test_job_queue() -> (Arc<JobQueue>, tempfile::TempDir, Arc<Notify>) {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("jobs.db");
         let jq = Arc::new(JobQueue::init(&path).await.unwrap());
+        let job_started = Arc::new(Notify::new());
+        let handler_started = Arc::clone(&job_started);
 
         let opt = Job::new(
             "knowledge.optimization",
             JobPriority::System,
             None,
             true,
-            |_ctx: JobContext| {
+            move |_ctx: JobContext| {
+                let handler_started = Arc::clone(&handler_started);
                 Box::pin(async move {
-                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    handler_started.notify_one();
                     Ok(())
                 })
             },
         );
         jq.register(opt).await.unwrap();
 
-        (jq, temp)
+        (jq, temp, job_started)
     }
 
     #[tokio::test]
     async fn test_submit_dedupes_pending() {
-        let (jq, _temp) = test_job_queue().await;
+        let (jq, _temp, _job_started) = test_job_queue().await;
         let llm = Arc::new(MockLlmClient::builder().build());
         let (sched, _shutdown_rx) =
             BackgroundScheduler::new(jq, llm, Duration::from_secs(1), Duration::from_secs(1));
@@ -368,7 +373,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_submit_dedupes_running() {
-        let (jq, _temp) = test_job_queue().await;
+        let (jq, _temp, _job_started) = test_job_queue().await;
         let llm = Arc::new(MockLlmClient::builder().build());
         let (sched, _shutdown_rx) =
             BackgroundScheduler::new(jq, llm, Duration::from_secs(1), Duration::from_secs(1));
@@ -389,7 +394,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_dispatch_after_debounce_and_cooldown() {
-        let (jq, _temp) = test_job_queue().await;
+        let (jq, _temp, job_started) = test_job_queue().await;
         let llm = Arc::new(MockLlmClient::builder().build());
         let (sched, shutdown_rx) = BackgroundScheduler::new(
             jq,
@@ -399,26 +404,26 @@ mod tests {
         );
 
         sched.submit(DaemonJob::KnowledgeOptimization).await;
-
         let sched_clone = Arc::clone(&sched);
         let handle = tokio::spawn(async move {
             sched_clone.start(shutdown_rx).await;
         });
 
-        // Wait for debounce + cooldown + a little extra.
-        tokio::time::sleep(Duration::from_millis(400)).await;
-
+        timeout(Duration::from_secs(5), job_started.notified())
+            .await
+            .expect("scheduler must dispatch after debounce and cooldown");
         // Job should have been dispatched and removed from pending.
-        let pending = sched.pending.lock().await;
-        assert!(pending.is_empty());
-
-        sched.shutdown_tx.send(true).unwrap();
-        let _ = handle.await;
+        assert!(sched.pending.lock().await.is_empty());
+        sched.shutdown();
+        tokio::time::timeout(Duration::from_secs(5), handle)
+            .await
+            .expect("scheduler must stop after shutdown")
+            .expect("scheduler task panicked");
     }
 
     #[tokio::test]
     async fn test_user_activity_resets_cooldown() {
-        let (jq, _temp) = test_job_queue().await;
+        let (jq, _temp, _job_started) = test_job_queue().await;
         let llm = Arc::new(MockLlmClient::builder().build());
         let (sched, shutdown_rx) = BackgroundScheduler::new(
             jq,
@@ -453,13 +458,13 @@ mod tests {
         let pending = sched.pending.lock().await;
         assert!(pending.contains(&DaemonJob::KnowledgeOptimization));
 
-        sched.shutdown_tx.send(true).unwrap();
+        sched.shutdown();
         let _ = handle.await;
     }
 
     #[tokio::test]
     async fn test_llm_busy_blocks_dispatch() {
-        let (jq, _temp) = test_job_queue().await;
+        let (jq, _temp, _job_started) = test_job_queue().await;
         let llm = Arc::new(MockLlmClient::builder().in_flight_count(1).build());
         let (sched, shutdown_rx) = BackgroundScheduler::new(
             jq,
@@ -481,23 +486,26 @@ mod tests {
         let pending = sched.pending.lock().await;
         assert!(pending.contains(&DaemonJob::KnowledgeOptimization));
 
-        sched.shutdown_tx.send(true).unwrap();
+        sched.shutdown();
         let _ = handle.await;
     }
 
     #[tokio::test]
     async fn test_shutdown_cancels_running_job() {
-        let (jq, _temp) = test_job_queue().await;
-        // Override the short dummy handler with a long-running one so the
-        // cancellation path is exercised rather than natural completion.
+        let (jq, _temp, _job_started) = test_job_queue().await;
+
+        let started = Arc::new(Notify::new());
+        let handler_started = Arc::clone(&started);
         jq.register(Job::new(
             "knowledge.optimization",
             JobPriority::System,
             None,
             true,
-            |_ctx: JobContext| {
+            move |ctx: JobContext| {
+                let handler_started = Arc::clone(&handler_started);
                 Box::pin(async move {
-                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    handler_started.notify_one();
+                    ctx.cancellation_token().cancelled().await;
                     Ok(())
                 })
             },
@@ -519,16 +527,15 @@ mod tests {
             sched_clone.start(shutdown_rx).await;
         });
 
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        while !jq.is_running("knowledge.optimization").await
-            && tokio::time::Instant::now() < deadline
-        {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        assert!(jq.is_running("knowledge.optimization").await);
+        timeout(Duration::from_secs(5), started.notified())
+            .await
+            .expect("scheduled job must start before shutdown");
 
         sched.shutdown();
-        let _ = handle.await;
+        tokio::time::timeout(Duration::from_secs(5), handle)
+            .await
+            .expect("scheduler must stop after shutdown")
+            .expect("scheduler task panicked");
 
         let status = jq.status("knowledge.optimization").await.unwrap();
         assert_eq!(

@@ -586,7 +586,6 @@ async fn retry_budget_exhausted_drops_instance() {
     let handle = tokio::spawn(async move { engine_clone.start(shutdown_rx).await });
 
     wait_for(|| handler.calls().len() == 2).await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
     assert_eq!(
         handler.calls().len(),
         2,
@@ -616,7 +615,6 @@ async fn terminal_failure_drops_instance() {
     let handle = tokio::spawn(async move { engine_clone.start(shutdown_rx).await });
 
     wait_for(|| handler.calls().len() == 1).await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
     assert_eq!(handler.calls().len(), 1);
     assert_eq!(engine.pending_depth_for("h").await, 0);
     engine.shutdown().await;

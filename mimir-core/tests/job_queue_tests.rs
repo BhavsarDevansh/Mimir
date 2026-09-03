@@ -67,7 +67,7 @@ async fn job_queue_times_out_long_running_job() {
             false,
             |_ctx| {
                 Box::pin(async move {
-                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    std::future::pending::<()>().await;
                     Ok(())
                 })
             },
@@ -75,7 +75,10 @@ async fn job_queue_times_out_long_running_job() {
         .await
         .unwrap();
 
-    let run = queue.run_now("test.timeout").await.unwrap();
+    let run = tokio::time::timeout(Duration::from_secs(5), queue.run_now("test.timeout"))
+        .await
+        .unwrap()
+        .unwrap();
 
     assert_eq!(run.status, JobRunStatus::TimedOut);
     assert!(run.finished_at.unwrap() >= run.started_at);
@@ -86,15 +89,20 @@ async fn job_queue_cancels_running_job() {
     let dir = tempfile::tempdir().unwrap();
     let queue = JobQueue::init(dir.path().join("jobs.db")).await.unwrap();
 
+    let started = Arc::new(tokio::sync::Notify::new());
+    let handler_started = Arc::clone(&started);
+    let started_wait = started.notified();
     queue
         .register(Job::new(
             "test.cancel",
             JobPriority::System,
             None,
             false,
-            |_ctx| {
+            move |ctx: JobContext| {
+                let handler_started = Arc::clone(&handler_started);
                 Box::pin(async move {
-                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    handler_started.notify_one();
+                    ctx.cancellation_token().cancelled().await;
                     Ok(())
                 })
             },
@@ -107,12 +115,9 @@ async fn job_queue_cancels_running_job() {
         async move { queue.run_now("test.cancel").await.unwrap() }
     });
 
-    // Wait until the job is actually running before cancelling it.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while !queue.is_running("test.cancel").await && tokio::time::Instant::now() < deadline {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert!(queue.is_running("test.cancel").await);
+    tokio::time::timeout(Duration::from_secs(5), started_wait)
+        .await
+        .expect("job must start before cancellation");
 
     assert!(queue.cancel("test.cancel"));
     let run = run_task.await.unwrap();
@@ -126,19 +131,22 @@ async fn job_queue_graceful_cancellation_records_cancelled() {
     let dir = tempfile::tempdir().unwrap();
     let queue = JobQueue::init(dir.path().join("jobs.db")).await.unwrap();
 
+    let started = Arc::new(tokio::sync::Notify::new());
+    let handler_started = Arc::clone(&started);
+    let started_wait = started.notified();
+
     queue
         .register(Job::new(
             "test.graceful",
             JobPriority::System,
             None,
             false,
-            |ctx: JobContext| {
+            move |ctx: JobContext| {
+                let handler_started = Arc::clone(&handler_started);
                 Box::pin(async move {
-                    let cancelled = ctx.cancellation_token();
-                    tokio::select! {
-                        _ = cancelled.cancelled() => Ok(()),
-                        _ = tokio::time::sleep(Duration::from_secs(30)) => Ok(()),
-                    }
+                    handler_started.notify_one();
+                    ctx.cancellation_token().cancelled().await;
+                    Ok(())
                 })
             },
         ))
@@ -150,11 +158,9 @@ async fn job_queue_graceful_cancellation_records_cancelled() {
         async move { queue.run_now("test.graceful").await.unwrap() }
     });
 
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while !queue.is_running("test.graceful").await && tokio::time::Instant::now() < deadline {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert!(queue.is_running("test.graceful").await);
+    tokio::time::timeout(Duration::from_secs(5), started_wait)
+        .await
+        .expect("job must start before cancellation");
 
     assert!(queue.cancel("test.graceful"));
     let run = run_task.await.unwrap();
@@ -169,14 +175,30 @@ async fn job_queue_cancel_all_cancels_running_jobs() {
     let dir = tempfile::tempdir().unwrap();
     let queue = JobQueue::init(dir.path().join("jobs.db")).await.unwrap();
 
-    for id in ["test.cancel_a", "test.cancel_b"] {
+    let started = [
+        Arc::new(tokio::sync::Notify::new()),
+        Arc::new(tokio::sync::Notify::new()),
+    ];
+    let started_waits = [started[0].notified(), started[1].notified()];
+    for (id, handler_started) in ["test.cancel_a", "test.cancel_b"]
+        .into_iter()
+        .zip(started.iter().cloned())
+    {
         queue
-            .register(Job::new(id, JobPriority::System, None, false, |_ctx| {
-                Box::pin(async move {
-                    tokio::time::sleep(Duration::from_secs(30)).await;
-                    Ok(())
-                })
-            }))
+            .register(Job::new(
+                id,
+                JobPriority::System,
+                None,
+                false,
+                move |_ctx| {
+                    let handler_started = Arc::clone(&handler_started);
+                    Box::pin(async move {
+                        handler_started.notify_waiters();
+                        std::future::pending::<()>().await;
+                        Ok(())
+                    })
+                },
+            ))
             .await
             .unwrap();
     }
@@ -190,14 +212,12 @@ async fn job_queue_cancel_all_cancels_running_jobs() {
         async move { queue.run_now("test.cancel_b").await.unwrap() }
     });
 
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while !(queue.is_running("test.cancel_a").await && queue.is_running("test.cancel_b").await)
-        && tokio::time::Instant::now() < deadline
-    {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert!(queue.is_running("test.cancel_a").await);
-    assert!(queue.is_running("test.cancel_b").await);
+    let [started_a, started_b] = started_waits;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(started_a, started_b);
+    })
+    .await
+    .expect("both jobs must start before cancellation");
 
     queue.cancel_all();
     assert_eq!(run_a.await.unwrap().status, JobRunStatus::Cancelled);
@@ -210,15 +230,20 @@ async fn job_queue_cancelled_status_persists_across_reopen() {
     let db_path = dir.path().join("jobs.db");
     let queue = JobQueue::init(&db_path).await.unwrap();
 
+    let started = Arc::new(tokio::sync::Notify::new());
+    let handler_started = Arc::clone(&started);
+    let started_wait = started.notified();
     queue
         .register(Job::new(
             "test.persist",
             JobPriority::System,
             None,
             false,
-            |_ctx| {
+            move |ctx: JobContext| {
+                let handler_started = Arc::clone(&handler_started);
                 Box::pin(async move {
-                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    handler_started.notify_one();
+                    ctx.cancellation_token().cancelled().await;
                     Ok(())
                 })
             },
@@ -231,11 +256,9 @@ async fn job_queue_cancelled_status_persists_across_reopen() {
         async move { queue.run_now("test.persist").await.unwrap() }
     });
 
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while !queue.is_running("test.persist").await && tokio::time::Instant::now() < deadline {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert!(queue.is_running("test.persist").await);
+    tokio::time::timeout(Duration::from_secs(5), started_wait)
+        .await
+        .expect("job must start before cancellation");
 
     assert!(queue.cancel("test.persist"));
     assert_eq!(run_task.await.unwrap().status, JobRunStatus::Cancelled);

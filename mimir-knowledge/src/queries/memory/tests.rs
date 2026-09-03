@@ -1,6 +1,6 @@
 //! Memory ranking/rendering tests.
 
-use super::ranking::{bucket_from_id, compute_temporal_boost, estimate_chars};
+use super::ranking::{bucket_from_id, compute_temporal_boost, estimate_chars, truncate_fact};
 use super::render::{format_upcoming_line, render_fact_line};
 use super::*;
 use crate::models::memory::{MemoryBucket, MemoryPriority, MemorySchema, RankedFact};
@@ -441,4 +441,27 @@ fn estimate_chars_basic() {
         estimate_chars("Alice", "has_partner", "Bob", None, None),
         22
     );
+}
+
+#[test]
+fn truncate_fact_excludes_fact_when_fixed_text_exceeds_budget() {
+    let fact = RankedFact {
+        fact_id: 1,
+        subject_name: "Devansh".to_string(),
+        relationship_type: "loves_eating".to_string(),
+        object_display: "sushi".to_string(),
+        valid_from: None,
+        valid_until: None,
+        confidence: 0.5,
+        score: 1.0,
+        temporal_boost: 1.0,
+        memory_weight: 1.0,
+        priority_boost: 1.0,
+        centrality_boost: 1.0,
+        category_ids: vec![],
+        bucket: MemoryBucket::Preferences,
+        char_estimate: 30,
+    };
+
+    assert_eq!(truncate_fact(fact, 20), None);
 }

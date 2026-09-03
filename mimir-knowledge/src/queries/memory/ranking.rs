@@ -45,13 +45,14 @@ pub(super) fn estimate_chars(
 }
 
 /// Truncate a fact to fit the remaining budget, appending `…`.
-/// Uses char-aware slicing to avoid panicking on multi-byte UTF-8 characters.
-pub(super) fn truncate_fact(mut fact: RankedFact, budget: usize) -> RankedFact {
+/// Uses byte-aware slicing to avoid panicking on multi-byte UTF-8 characters.
+/// Returns `None` when the fixed fact text already consumes the budget.
+pub(super) fn truncate_fact(mut fact: RankedFact, budget: usize) -> Option<RankedFact> {
     let bounds_len = temporal_bounds_len(fact.valid_from, fact.valid_until);
     let max_obj = budget
         .saturating_sub(fact.subject_name.len() + fact.relationship_type.len() + 3 + bounds_len);
     if max_obj == 0 {
-        fact.object_display = "…".to_string();
+        return None;
     } else if fact.object_display.len() > max_obj {
         let limit = max_obj.saturating_sub(1);
         let mut truncated = String::with_capacity(limit);
@@ -64,7 +65,7 @@ pub(super) fn truncate_fact(mut fact: RankedFact, budget: usize) -> RankedFact {
         fact.object_display = format!("{}…", truncated);
     }
     fact.char_estimate = budget;
-    fact
+    Some(fact)
 }
 
 // ---------------------------------------------------------------------------

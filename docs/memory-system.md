@@ -31,7 +31,7 @@ Implemented in `mimir-knowledge/src/queries/memory/`.
 - **Temporal boost** increases score for upcoming events (birthdays, appointments) based on proximity
 - **Priority** (`memory_priority_id`) gives critical facts a 2× multiplier
 - **Centrality** boosts facts about well-connected entities (people mentioned often)
-- **Fill algorithm**: Sort by score descending, greedily fill the character budget, truncate last entry with `…` if exceeded
+- **Fill algorithm**: Sort by score descending, greedily fill the character budget, truncate the last entry with `…` if its object fits; skip a fact when its fixed text already consumes the remaining budget
 
 ### Memory Buckets
 

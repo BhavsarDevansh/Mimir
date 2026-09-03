@@ -178,15 +178,16 @@ pub async fn build_memory_schema_with_opts(
                 _ => schema.general.push(fact),
             }
         } else if consumes_budget && remaining_budget > 0 {
-            // Truncate last entry with …
-            let truncated = truncate_fact(fact, remaining_budget);
-            match truncated.bucket {
-                MemoryBucket::Relationships => schema.relationships.push(truncated),
-                MemoryBucket::Preferences => schema.preferences.push(truncated),
-                MemoryBucket::Upcoming => schema.upcoming.push(truncated),
-                _ => schema.general.push(truncated),
+            // Truncate the last entry when its object fits; skip otherwise.
+            if let Some(truncated) = truncate_fact(fact, remaining_budget) {
+                match truncated.bucket {
+                    MemoryBucket::Relationships => schema.relationships.push(truncated),
+                    MemoryBucket::Preferences => schema.preferences.push(truncated),
+                    MemoryBucket::Upcoming => schema.upcoming.push(truncated),
+                    _ => schema.general.push(truncated),
+                }
+                remaining_budget = 0;
             }
-            remaining_budget = 0;
             continue;
         } else if !consumes_budget {
             // Excluded from budget: always include, never count against budget

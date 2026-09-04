@@ -28,6 +28,8 @@ Save a baseline:
 cargo bench -p mimir-knowledge --features test-benchmark --bench memory_benchmark -- --save-baseline /tmp/memory-baseline.json
 ```
 
+Baselines are validated for the current schema and all metric fields before comparison.
+
 Compare a later change:
 
 ```bash
@@ -61,7 +63,7 @@ cargo bench -p mimir-knowledge --features test-benchmark --bench memory_benchmar
 | `retrieval_latency_p95_us` | 95th percentile latency for building and rendering memory. |
 | `retrieval_latency_p99_us` | 99th percentile latency for building and rendering memory. |
 | `ingestion_throughput_facts_per_second` | Facts accepted by the normalized ingestion path per second. |
-| `memory_index_growth_bytes` | SQLite database file size after ingestion. |
+| `memory_index_size_bytes` | SQLite database file size after ingestion. |
 | `rendered_token_output_estimate` | Deterministic character estimate divided by four. |
 | `benchmark_wall_time_ms` | Total harness wall time. |
 

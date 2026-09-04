@@ -1,7 +1,8 @@
 //! Baseline comparison helpers for memory benchmark reports.
 
-use super::{BenchmarkReport, MetricName, PerformanceName};
+use super::{BenchmarkReport, PERFORMANCE_METRICS, QUALITY_METRICS};
 
+/// The absolute and directional change for one benchmark metric.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MetricDelta {
     pub name: String,
@@ -11,6 +12,7 @@ pub struct MetricDelta {
     pub direction: DeltaDirection,
 }
 
+/// Whether a metric change improved, worsened, or did not move.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DeltaDirection {
     Better,
@@ -18,6 +20,7 @@ pub enum DeltaDirection {
     Unchanged,
 }
 
+/// The complete comparison between a current report and a saved baseline.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BaselineComparison {
     pub quality: Vec<MetricDelta>,
@@ -25,22 +28,13 @@ pub struct BaselineComparison {
     pub regressions: Vec<MetricDelta>,
 }
 
+/// Compares a current benchmark report against a saved baseline and records regressions.
 pub fn compare_baseline(
     current: &BenchmarkReport,
     baseline: &BenchmarkReport,
 ) -> BaselineComparison {
     let mut quality = Vec::new();
-    for metric in [
-        MetricName::RecallAt5,
-        MetricName::PrecisionAt5,
-        MetricName::ProvenanceAccuracy,
-        MetricName::CitationFabricationRate,
-        MetricName::TemporalCorrectness,
-        MetricName::ConsolidationStability,
-        MetricName::DedupPrecision,
-        MetricName::PrivacyFalseAllowRate,
-        MetricName::PrivacyFalseBlockRate,
-    ] {
+    for metric in QUALITY_METRICS {
         let baseline_value = baseline
             .metrics
             .quality
@@ -71,14 +65,7 @@ pub fn compare_baseline(
     }
 
     let mut performance = Vec::new();
-    for metric in [
-        PerformanceName::RetrievalLatencyP95,
-        PerformanceName::RetrievalLatencyP99,
-        PerformanceName::IngestionThroughput,
-        PerformanceName::MemoryIndexGrowth,
-        PerformanceName::RenderedTokenOutput,
-        PerformanceName::BenchmarkWallTime,
-    ] {
+    for metric in PERFORMANCE_METRICS {
         let baseline_value = baseline
             .metrics
             .performance

@@ -15,6 +15,28 @@ use crate::models::enums::RecurrenceType;
 use crate::models::source::{ExtractionMethod, SourceType};
 use crate::normalize::{NormalizedFact, Provenance, normalize_and_insert};
 
+const QUALITY_METRICS: &[MetricName] = &[
+    MetricName::RecallAt5,
+    MetricName::PrecisionAt5,
+    MetricName::ProvenanceAccuracy,
+    MetricName::CitationFabricationRate,
+    MetricName::TemporalCorrectness,
+    MetricName::ConsolidationStability,
+    MetricName::DedupPrecision,
+    MetricName::PrivacyFalseAllowRate,
+    MetricName::PrivacyFalseBlockRate,
+];
+
+const PERFORMANCE_METRICS: &[PerformanceName] = &[
+    PerformanceName::RetrievalLatencyP95,
+    PerformanceName::RetrievalLatencyP99,
+    PerformanceName::IngestionThroughput,
+    PerformanceName::MemoryIndexSize,
+    PerformanceName::RenderedTokenOutput,
+    PerformanceName::BenchmarkWallTime,
+];
+
+/// Quality metric names used by the deterministic memory benchmark report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum MetricName {
     RecallAt5,
@@ -29,6 +51,7 @@ pub enum MetricName {
 }
 
 impl MetricName {
+    /// Returns the stable JSON field name for this metric.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::RecallAt5 => "recall_at_5",
@@ -53,23 +76,25 @@ impl MetricName {
     }
 }
 
+/// Performance metric names used by the deterministic memory benchmark report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum PerformanceName {
     RetrievalLatencyP95,
     RetrievalLatencyP99,
     IngestionThroughput,
-    MemoryIndexGrowth,
+    MemoryIndexSize,
     RenderedTokenOutput,
     BenchmarkWallTime,
 }
 
 impl PerformanceName {
+    /// Returns the stable JSON field name for this metric.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::RetrievalLatencyP95 => "retrieval_latency_p95_us",
             Self::RetrievalLatencyP99 => "retrieval_latency_p99_us",
             Self::IngestionThroughput => "ingestion_throughput_facts_per_second",
-            Self::MemoryIndexGrowth => "memory_index_growth_bytes",
+            Self::MemoryIndexSize => "memory_index_size_bytes",
             Self::RenderedTokenOutput => "rendered_token_output_estimate",
             Self::BenchmarkWallTime => "benchmark_wall_time_ms",
         }
@@ -80,9 +105,9 @@ impl PerformanceName {
     }
 }
 
+/// Inputs for the deterministic memory benchmark runner.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BenchmarkConfig {
-    pub seed: u64,
     pub fixture_version: u32,
     pub memory_budget: usize,
     pub min_confidence: f32,
@@ -110,14 +135,13 @@ impl Default for BenchmarkConfig {
             (PerformanceName::RetrievalLatencyP95, 100_000.0),
             (PerformanceName::RetrievalLatencyP99, 250_000.0),
             (PerformanceName::IngestionThroughput, 1.0),
-            (PerformanceName::MemoryIndexGrowth, 10_000_000.0),
+            (PerformanceName::MemoryIndexSize, 10_000_000.0),
             (PerformanceName::RenderedTokenOutput, 10_000.0),
             (PerformanceName::BenchmarkWallTime, 30_000.0),
         ]
         .into_iter()
         .collect();
         Self {
-            seed: 0x05f3_759d_f568_0001,
             fixture_version: 1,
             memory_budget: 2_500,
             min_confidence: 0.50,
@@ -128,6 +152,7 @@ impl Default for BenchmarkConfig {
     }
 }
 
+/// A declarative expectation for one fact in the benchmark fixture bank.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FixtureFact {
     pub id: String,
@@ -151,6 +176,7 @@ pub struct FixtureFact {
     pub duplicate_of: Option<String>,
 }
 
+/// A declarative memory-query expectation for the benchmark fixture bank.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FixtureQuery {
     pub id: String,
@@ -159,14 +185,15 @@ pub struct FixtureQuery {
     pub expected_top_fact_ids: Vec<String>,
 }
 
+/// Deterministic fixtures used by the memory benchmark runner.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FixtureBank {
-    pub seed: u64,
     pub fixture_version: u32,
     pub facts: Vec<FixtureFact>,
     pub queries: Vec<FixtureQuery>,
 }
 
+/// A quality or performance threshold that the benchmark report violated.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Violation {
     pub metric: ViolationMetric,
@@ -175,18 +202,21 @@ pub struct Violation {
     pub kind: ViolationKind,
 }
 
+/// The comparison direction for a benchmark threshold.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ViolationKind {
     BelowMinimum,
     AboveMaximum,
 }
 
+/// A benchmark metric that can violate a configured threshold.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ViolationMetric {
     Quality(MetricName),
     Performance(PerformanceName),
 }
 
+/// Quality and performance measurements for one benchmark run.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BenchmarkMetrics {
     pub quality: HashMap<String, f64>,
@@ -196,28 +226,11 @@ pub struct BenchmarkMetrics {
 impl Default for BenchmarkMetrics {
     fn default() -> Self {
         let mut quality = HashMap::new();
-        for metric in [
-            MetricName::RecallAt5,
-            MetricName::PrecisionAt5,
-            MetricName::ProvenanceAccuracy,
-            MetricName::CitationFabricationRate,
-            MetricName::TemporalCorrectness,
-            MetricName::ConsolidationStability,
-            MetricName::DedupPrecision,
-            MetricName::PrivacyFalseAllowRate,
-            MetricName::PrivacyFalseBlockRate,
-        ] {
+        for metric in QUALITY_METRICS {
             quality.insert(metric.as_str().to_string(), 0.0);
         }
         let mut performance = HashMap::new();
-        for metric in [
-            PerformanceName::RetrievalLatencyP95,
-            PerformanceName::RetrievalLatencyP99,
-            PerformanceName::IngestionThroughput,
-            PerformanceName::MemoryIndexGrowth,
-            PerformanceName::RenderedTokenOutput,
-            PerformanceName::BenchmarkWallTime,
-        ] {
+        for metric in PERFORMANCE_METRICS {
             performance.insert(metric.as_str().to_string(), 0.0);
         }
         Self {
@@ -227,11 +240,11 @@ impl Default for BenchmarkMetrics {
     }
 }
 
+/// The machine-readable result of a deterministic memory benchmark run.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BenchmarkReport {
     pub schema_version: u32,
     pub fixture_version: u32,
-    pub seed: u64,
     pub generated_at: String,
     pub metrics: BenchmarkMetrics,
     pub violations: Vec<Violation>,
@@ -241,6 +254,7 @@ fn fixed_now() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 1, 1, 12, 0, 0).unwrap()
 }
 
+/// Creates a complete entity-backed benchmark fixture.
 #[allow(clippy::too_many_arguments)]
 fn fact(
     id: &str,
@@ -288,6 +302,7 @@ fn fact(
     }
 }
 
+/// Creates a complete literal-valued benchmark fixture.
 fn literal_fact(
     id: &str,
     domain: &'static str,
@@ -319,7 +334,11 @@ fn literal_fact(
     }
 }
 
+/// Generates the deterministic fixture bank for a benchmark configuration.
 pub fn generate_fixture_bank(config: &BenchmarkConfig) -> Result<FixtureBank, String> {
+    if config.scale_multiplier == 0 {
+        return Err("scale_multiplier must be greater than zero".to_string());
+    }
     let now = fixed_now();
     let mut facts = vec![
         fact(
@@ -449,8 +468,6 @@ pub fn generate_fixture_bank(config: &BenchmarkConfig) -> Result<FixtureBank, St
             &[320],
         ),
     ];
-    facts[12].expected_sensitive_allowed = false;
-
     let mut duplicate = fact(
         "duplicate-email",
         "email",
@@ -461,7 +478,6 @@ pub fn generate_fixture_bank(config: &BenchmarkConfig) -> Result<FixtureBank, St
         Some(now + Duration::days(3)),
         Some(now + Duration::days(3) + Duration::hours(1)),
     );
-    duplicate.id = "duplicate-email".to_string();
     duplicate.duplicate_of = Some("calendar-future".to_string());
     duplicate.expected_relevant = false;
     facts.push(duplicate);
@@ -482,7 +498,6 @@ pub fn generate_fixture_bank(config: &BenchmarkConfig) -> Result<FixtureBank, St
         SourceType::Interaction,
         &[770],
     );
-    non_sensitive_flagged.id = "non-sensitive-flagged".to_string();
     non_sensitive_flagged.is_sensitive = true;
     non_sensitive_flagged.expected_sensitive_allowed = true;
     facts.push(non_sensitive_flagged);
@@ -498,7 +513,6 @@ pub fn generate_fixture_bank(config: &BenchmarkConfig) -> Result<FixtureBank, St
             None,
             None,
         );
-        filler.id = format!("filler-{index}");
         filler.object = format!("Filler Event {index}");
         filler.raw_reference = Some(format!("notes:filler-{index}"));
         filler.expected_relevant = false;
@@ -531,7 +545,6 @@ pub fn generate_fixture_bank(config: &BenchmarkConfig) -> Result<FixtureBank, St
     ];
 
     Ok(FixtureBank {
-        seed: config.seed,
         fixture_version: config.fixture_version,
         facts,
         queries,
@@ -598,6 +611,7 @@ async fn ingest(
     Ok(fact_ids)
 }
 
+/// Calculates the nearest-rank percentile from microsecond samples.
 fn percentile(values: &[u128], percentile: f64) -> u128 {
     if values.is_empty() {
         return 0;
@@ -608,10 +622,12 @@ fn percentile(values: &[u128], percentile: f64) -> u128 {
     sorted[index]
 }
 
+/// Rounds a performance metric to three decimal places.
 fn round_to_three(value: f64) -> f64 {
     (value * 1_000.0).round() / 1_000.0
 }
 
+/// Runs the deterministic memory benchmark and returns its JSON report.
 pub async fn run_memory_benchmark(
     config: &BenchmarkConfig,
 ) -> Result<BenchmarkReport, crate::KnowledgeError> {
@@ -827,7 +843,7 @@ pub async fn run_memory_benchmark(
         .map(|metadata| metadata.len())
         .unwrap_or(0);
     performance.insert(
-        PerformanceName::MemoryIndexGrowth.as_str().to_string(),
+        PerformanceName::MemoryIndexSize.as_str().to_string(),
         db_bytes as f64,
     );
     performance.insert(
@@ -889,7 +905,6 @@ pub async fn run_memory_benchmark(
     let report = BenchmarkReport {
         schema_version: 1,
         fixture_version: config.fixture_version,
-        seed: config.seed,
         generated_at: chrono::Utc::now().to_rfc3339(),
         metrics,
         violations,
@@ -897,6 +912,7 @@ pub async fn run_memory_benchmark(
     Ok(report)
 }
 
+/// Writes a benchmark report to the requested baseline file.
 pub async fn save_baseline(
     report: &BenchmarkReport,
     path: &std::path::Path,
@@ -911,11 +927,46 @@ pub async fn save_baseline(
     Ok(())
 }
 
+/// Reads and validates a benchmark report baseline file.
 pub async fn load_baseline(
     path: &std::path::Path,
 ) -> Result<BenchmarkReport, crate::KnowledgeError> {
     let bytes = tokio::fs::read(path).await?;
-    serde_json::from_slice(&bytes).map_err(|error| {
+    let report: BenchmarkReport = serde_json::from_slice(&bytes).map_err(|error| {
         crate::KnowledgeError::Validation(format!("baseline deserialization failed: {error}"))
-    })
+    })?;
+    if report.schema_version != 1 {
+        return Err(crate::KnowledgeError::Validation(format!(
+            "unsupported baseline schema version: {}",
+            report.schema_version
+        )));
+    }
+    if report.fixture_version == 0 {
+        return Err(crate::KnowledgeError::Validation(
+            "baseline fixture version must be greater than zero".to_string(),
+        ));
+    }
+    for metric in QUALITY_METRICS {
+        match report.metrics.quality.get(metric.as_str()).copied() {
+            Some(value) if value.is_finite() => {}
+            value => {
+                return Err(crate::KnowledgeError::Validation(format!(
+                    "missing baseline metric: {}",
+                    value.map(|_| metric.as_str()).unwrap_or(metric.as_str())
+                )));
+            }
+        }
+    }
+    for metric in PERFORMANCE_METRICS {
+        match report.metrics.performance.get(metric.as_str()).copied() {
+            Some(value) if value.is_finite() => {}
+            _ => {
+                return Err(crate::KnowledgeError::Validation(format!(
+                    "missing baseline metric: {}",
+                    metric.as_str()
+                )));
+            }
+        }
+    }
+    Ok(report)
 }

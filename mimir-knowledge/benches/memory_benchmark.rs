@@ -15,7 +15,7 @@ enum ParsedCli {
 }
 
 fn usage() -> &'static str {
-    "Usage: memory_benchmark [--seed SEED] [--scale COUNT] [--baseline PATH] \
+    "Usage: memory_benchmark [--scale COUNT] [--baseline PATH] \
      [--output PATH] [--save-baseline PATH]"
 }
 
@@ -61,11 +61,6 @@ where
                 if name != "memory_benchmark" {
                     return Err(format!("unknown benchmark: {name}"));
                 }
-            }
-            "--seed" => {
-                cli.config.seed = parse_next_value(&mut args, &arg)?
-                    .parse()
-                    .map_err(|_| "seed must be a u64".to_string())?;
             }
             "--scale" => {
                 cli.config.scale_multiplier =

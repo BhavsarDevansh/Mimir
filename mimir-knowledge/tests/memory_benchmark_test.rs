@@ -18,13 +18,51 @@ async fn benchmark_saves_and_loads_baseline() {
     assert_eq!(report, loaded);
 }
 
+#[tokio::test]
+async fn load_baseline_rejects_unknown_schema_version() {
+    let report = BenchmarkReport {
+        schema_version: 2,
+        fixture_version: 1,
+        generated_at: "2026-01-01T00:00:00Z".to_string(),
+        metrics: BenchmarkMetrics::default(),
+        violations: Vec::new(),
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("baseline.json");
+    tokio::fs::write(&path, serde_json::to_string(&report).unwrap())
+        .await
+        .unwrap();
+    let error = load_baseline(&path).await.unwrap_err();
+    assert!(error.to_string().contains("unsupported baseline schema"));
+}
+
+#[tokio::test]
+async fn load_baseline_rejects_incomplete_metrics() {
+    let mut report = BenchmarkReport {
+        schema_version: 1,
+        fixture_version: 1,
+        generated_at: "2026-01-01T00:00:00Z".to_string(),
+        metrics: BenchmarkMetrics::default(),
+        violations: Vec::new(),
+    };
+    report
+        .metrics
+        .quality
+        .remove(MetricName::RecallAt5.as_str());
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("baseline.json");
+    tokio::fs::write(&path, serde_json::to_string(&report).unwrap())
+        .await
+        .unwrap();
+    let error = load_baseline(&path).await.unwrap_err();
+    assert!(error.to_string().contains("missing baseline metric"));
+}
+
 #[test]
 fn baseline_comparison_flags_regressions() {
-    let config = BenchmarkConfig::default();
     let mut current = BenchmarkReport {
         schema_version: 1,
         fixture_version: 1,
-        seed: config.seed,
         generated_at: "2026-01-01T00:00:00Z".to_string(),
         metrics: BenchmarkMetrics::default(),
         violations: Vec::new(),
@@ -91,7 +129,7 @@ async fn benchmark_reports_all_named_metrics() {
         "retrieval_latency_p95_us",
         "retrieval_latency_p99_us",
         "ingestion_throughput_facts_per_second",
-        "memory_index_growth_bytes",
+        "memory_index_size_bytes",
         "rendered_token_output_estimate",
         "benchmark_wall_time_ms",
     ] {
@@ -150,6 +188,18 @@ fn generated_fixtures_are_deterministic() {
 }
 
 #[test]
+fn zero_scale_multiplier_is_rejected() {
+    let config = BenchmarkConfig {
+        scale_multiplier: 0,
+        ..BenchmarkConfig::default()
+    };
+    assert_eq!(
+        generate_fixture_bank(&config),
+        Err("scale_multiplier must be greater than zero".to_string())
+    );
+}
+
+#[test]
 fn recurring_event_fixture_has_weekly_recurrence() {
     let config = BenchmarkConfig::default();
     let bank = generate_fixture_bank(&config).unwrap();
@@ -164,11 +214,9 @@ fn recurring_event_fixture_has_weekly_recurrence() {
 
 #[test]
 fn report_serialises_to_machine_readable_json() {
-    let config = BenchmarkConfig::default();
     let report = BenchmarkReport {
         schema_version: 1,
         fixture_version: 1,
-        seed: config.seed,
         generated_at: "2026-01-01T00:00:00Z".to_string(),
         metrics: BenchmarkMetrics::default(),
         violations: Vec::new(),

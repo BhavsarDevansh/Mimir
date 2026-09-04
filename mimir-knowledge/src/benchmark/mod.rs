@@ -926,45 +926,6 @@ pub async fn run_memory_benchmark(
     Ok(report)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::HashSet;
-
-    #[test]
-    fn default_thresholds_detect_complete_failures() {
-        let config = BenchmarkConfig::default();
-        assert_eq!(
-            config.thresholds[&MetricName::CitationFabricationRate],
-            0.20
-        );
-        assert_eq!(config.thresholds[&MetricName::PrivacyFalseAllowRate], 0.0);
-        assert_eq!(config.thresholds[&MetricName::PrivacyFalseBlockRate], 0.0);
-    }
-
-    #[test]
-    fn fillers_have_unique_fixture_ids() {
-        let mut config = BenchmarkConfig::default();
-        config.scale_multiplier = 10;
-        let bank = generate_fixture_bank(&config).expect("fixture bank");
-        let filler_ids: HashSet<_> = bank
-            .facts
-            .iter()
-            .filter(|fact| fact.id.starts_with("filler-"))
-            .map(|fact| fact.id.clone())
-            .collect();
-        assert_eq!(filler_ids.len(), 10);
-        assert!(filler_ids.contains("filler-5"));
-    }
-
-    #[test]
-    fn percentile_distinguishes_high_ranks() {
-        let samples: Vec<u128> = (0..100u128).collect();
-        assert_eq!(percentile(&samples, 0.95), 94);
-        assert_eq!(percentile(&samples, 0.99), 98);
-    }
-}
-
 /// Writes a benchmark report to the requested baseline file.
 pub async fn save_baseline(
     report: &BenchmarkReport,
@@ -1022,4 +983,45 @@ pub async fn load_baseline(
         }
     }
     Ok(report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn default_thresholds_detect_complete_failures() {
+        let config = BenchmarkConfig::default();
+        assert_eq!(
+            config.thresholds[&MetricName::CitationFabricationRate],
+            0.20
+        );
+        assert_eq!(config.thresholds[&MetricName::PrivacyFalseAllowRate], 0.0);
+        assert_eq!(config.thresholds[&MetricName::PrivacyFalseBlockRate], 0.0);
+    }
+
+    #[test]
+    fn fillers_have_unique_fixture_ids() {
+        let config = BenchmarkConfig {
+            scale_multiplier: 10,
+            ..BenchmarkConfig::default()
+        };
+        let bank = generate_fixture_bank(&config).expect("fixture bank");
+        let filler_ids: HashSet<_> = bank
+            .facts
+            .iter()
+            .filter(|fact| fact.id.starts_with("filler-"))
+            .map(|fact| fact.id.clone())
+            .collect();
+        assert_eq!(filler_ids.len(), 10);
+        assert!(filler_ids.contains("filler-5"));
+    }
+
+    #[test]
+    fn percentile_distinguishes_high_ranks() {
+        let samples: Vec<u128> = (0..100u128).collect();
+        assert_eq!(percentile(&samples, 0.95), 94);
+        assert_eq!(percentile(&samples, 0.99), 98);
+    }
 }

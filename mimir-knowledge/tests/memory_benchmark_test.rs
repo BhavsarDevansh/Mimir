@@ -84,7 +84,7 @@ fn baseline_comparison_flags_regressions() {
         PerformanceName::RetrievalLatencyP95.as_str().to_string(),
         1.0,
     );
-    let comparison = compare_baseline(&current, &baseline);
+    let comparison = compare_baseline(&current, &baseline).unwrap();
     assert!(
         comparison
             .regressions

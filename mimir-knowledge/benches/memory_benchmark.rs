@@ -111,8 +111,14 @@ async fn main() {
     if let Some(path) = cli.baseline_path {
         match load_baseline(&path).await {
             Ok(baseline) => {
-                let comparison = compare_baseline(&report, &baseline);
-                println!(
+                let comparison = match compare_baseline(&report, &baseline) {
+                    Ok(comparison) => comparison,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        std::process::exit(1);
+                    }
+                };
+                eprintln!(
                     "{}",
                     serde_json::to_string_pretty(&comparison)
                         .expect("baseline comparison serialization")

@@ -122,12 +122,12 @@ impl Default for BenchmarkConfig {
             (MetricName::RecallAt5, 0.50),
             (MetricName::PrecisionAt5, 0.50),
             (MetricName::ProvenanceAccuracy, 0.50),
-            (MetricName::CitationFabricationRate, 1.00),
+            (MetricName::CitationFabricationRate, 0.20),
             (MetricName::TemporalCorrectness, 0.50),
             (MetricName::ConsolidationStability, 0.50),
             (MetricName::DedupPrecision, 0.50),
-            (MetricName::PrivacyFalseAllowRate, 1.00),
-            (MetricName::PrivacyFalseBlockRate, 1.00),
+            (MetricName::PrivacyFalseAllowRate, 0.00),
+            (MetricName::PrivacyFalseBlockRate, 0.00),
         ]
         .into_iter()
         .collect();
@@ -504,7 +504,7 @@ pub fn generate_fixture_bank(config: &BenchmarkConfig) -> Result<FixtureBank, St
 
     for index in 0..config.scale_multiplier.max(1) {
         let mut filler = fact(
-            "filler",
+            &format!("filler-{index}"),
             "notes",
             "has_event",
             "Filler Event",
@@ -594,7 +594,14 @@ async fn ingest(
     let provenance = Provenance::chat(ExtractionMethod::UserInput);
     let outcome = normalize_and_insert(kg, normalized, provenance).await?;
     if !outcome.errors.is_empty() {
-        return Err(outcome.errors.into_iter().next().unwrap());
+        return Err(crate::KnowledgeError::Validation(
+            outcome
+                .errors
+                .into_iter()
+                .map(|error| error.to_string())
+                .collect::<Vec<_>>()
+                .join("; "),
+        ));
     }
 
     for item in &bank.facts {
@@ -658,7 +665,7 @@ pub async fn run_memory_benchmark(
     let mut latency_samples = Vec::new();
     let mut rendered = String::new();
     let mut last_schema = None;
-    for _ in 0..10 {
+    for _ in 0..100 {
         rendered.clear();
         let started_retrieval = std::time::Instant::now();
         let schema = kg
@@ -697,7 +704,7 @@ pub async fn run_memory_benchmark(
         .collect();
     let top_hits = expected_top
         .iter()
-        .filter(|expected| returned_ids.contains(expected))
+        .filter(|expected| returned_ids_top5.contains(expected))
         .count();
     quality.insert(
         MetricName::RecallAt5.as_str().to_string(),
@@ -795,7 +802,21 @@ pub async fn run_memory_benchmark(
     let mut sensitive_checked = 0usize;
     let mut non_sensitive_blocked = 0usize;
     let mut non_sensitive_checked = 0usize;
-    for item in &bank.facts {
+    for item in bank
+        .facts
+        .iter()
+        .filter(|item| item.is_sensitive && !item.expected_sensitive_allowed)
+    {
+        sensitive_checked += 1;
+        if returned_ids.contains(&item.id.as_str()) {
+            sensitive_allowed += 1;
+        }
+    }
+    for item in bank
+        .facts
+        .iter()
+        .filter(|item| item.is_sensitive && item.expected_sensitive_allowed)
+    {
         let Some(fact_id) = fact_ids.get(&item.id) else {
             continue;
         };
@@ -804,16 +825,9 @@ pub async fn run_memory_benchmark(
                 .bind(fact_id)
                 .fetch_one(kg.pool())
                 .await?;
-        if item.is_sensitive && !item.expected_sensitive_allowed {
-            sensitive_checked += 1;
-            if !pending {
-                sensitive_allowed += 1;
-            }
-        } else if item.is_sensitive && item.expected_sensitive_allowed {
-            non_sensitive_checked += 1;
-            if pending {
-                non_sensitive_blocked += 1;
-            }
+        non_sensitive_checked += 1;
+        if pending {
+            non_sensitive_blocked += 1;
         }
     }
     quality.insert(
@@ -840,8 +854,8 @@ pub async fn run_memory_benchmark(
     );
     let db_bytes = tokio::fs::metadata(dir.path().join("knowledge.db"))
         .await
-        .map(|metadata| metadata.len())
-        .unwrap_or(0);
+        .map_err(crate::KnowledgeError::Io)?
+        .len();
     performance.insert(
         PerformanceName::MemoryIndexSize.as_str().to_string(),
         db_bytes as f64,
@@ -910,6 +924,45 @@ pub async fn run_memory_benchmark(
         violations,
     };
     Ok(report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn default_thresholds_detect_complete_failures() {
+        let config = BenchmarkConfig::default();
+        assert_eq!(
+            config.thresholds[&MetricName::CitationFabricationRate],
+            0.20
+        );
+        assert_eq!(config.thresholds[&MetricName::PrivacyFalseAllowRate], 0.0);
+        assert_eq!(config.thresholds[&MetricName::PrivacyFalseBlockRate], 0.0);
+    }
+
+    #[test]
+    fn fillers_have_unique_fixture_ids() {
+        let mut config = BenchmarkConfig::default();
+        config.scale_multiplier = 10;
+        let bank = generate_fixture_bank(&config).expect("fixture bank");
+        let filler_ids: HashSet<_> = bank
+            .facts
+            .iter()
+            .filter(|fact| fact.id.starts_with("filler-"))
+            .map(|fact| fact.id.clone())
+            .collect();
+        assert_eq!(filler_ids.len(), 10);
+        assert!(filler_ids.contains("filler-5"));
+    }
+
+    #[test]
+    fn percentile_distinguishes_high_ranks() {
+        let samples: Vec<u128> = (0..100u128).collect();
+        assert_eq!(percentile(&samples, 0.95), 94);
+        assert_eq!(percentile(&samples, 0.99), 98);
+    }
 }
 
 /// Writes a benchmark report to the requested baseline file.

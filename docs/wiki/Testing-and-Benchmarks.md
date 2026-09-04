@@ -13,7 +13,7 @@ A `tests-and-benchmarks` pass massively expanded Mimir's automated test and benc
 - **Shared test doubles** (`mimir-connectors::test_utils`, feature `test-utils`, issues #290, #298) own the fake-browser opener (`self_callback_opener`), authorize-URL parsing (`parse_authorize_url` / `callback_url`), and the wiremock token-endpoint mock (`mount_token_endpoint`) that the PKCE flow unit tests and the CLI connector tests both use, so the two suites can never drift apart.
 - **Benchmarks** (criterion) measure both hotpaths (context manager, KG inference, memory condensation) and non-hotpath pure helpers (FTS5 escaping, confidence scoring, serde roundtrips).
 
-The deterministic memory benchmark harness (issue #568) adds quality and performance budgets for the current knowledge graph and memory pipeline. It is off by default and does not compile into production builds. Run `cargo bench -p mimir-knowledge --features test-benchmark --bench memory_benchmark` to emit JSON or use `--save-baseline`/`--baseline` for local comparisons. See `docs/memory-benchmark.md`.
+The deterministic memory benchmark harness (issue #568) adds quality and performance budgets for the current knowledge graph and memory pipeline. It is off by default and omitted from default production builds. Run `cargo bench -p mimir-knowledge --features test-benchmark --bench memory_benchmark` to emit JSON or use `--save-baseline`/`--baseline` for local comparisons. See `docs/memory-benchmark.md`.
 
 ## Running them
 

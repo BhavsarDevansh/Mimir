@@ -133,6 +133,7 @@ pub const CONNECTOR_EMITTED_PREDICATES: &[&str] = &[
 /// canonical predicate (pinned by `multi_valued_predicates_are_canonical` in
 /// `mimir-knowledge/tests/predicate_allowlist_test.rs`).
 pub const MULTI_VALUED_PREDICATES: &[&str] = &[
+    "has_event",
     "prefers",
     "hobby",
     "dislikes",

@@ -131,6 +131,10 @@ The full project vision, architecture, and design documentation lives in the `VI
 
 Technical implementation docs (per-subsystem, including OAuth, testing, and the connector framework) live in [docs/](docs/), and user-facing feature docs in [docs/wiki/](docs/wiki/).
 
+## Benchmarks
+
+Run the deterministic memory benchmark suite with `cargo bench -p mimir-knowledge --features test-benchmark --bench memory_benchmark`. It emits JSON, supports local baseline comparison, and reports memory quality and performance budgets without LLM or network calls. See `docs/memory-benchmark.md` for interpretation.
+
 ## License
 
 [GNU General Public License v3.0](LICENSE)

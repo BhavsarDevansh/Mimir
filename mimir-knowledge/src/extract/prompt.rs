@@ -10,7 +10,7 @@ use crate::{KnowledgeError, KnowledgeGraph};
 
 /// Render a category name as one prompt-safe line.
 fn category_display_name(name: &str) -> String {
-    name.replace(['\r', '\n'], " ")
+    name.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Render every category and its descendants for the extraction prompt.

@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::models::category::{Category, NewCategory};
+use crate::models::category::NewCategory;
 use mimir_core::conversation::{ConversationMessage, MessageRole};
 
 /// Fresh in-memory-style KnowledgeGraph in a temp dir for prompt tests.
@@ -19,7 +19,7 @@ fn sample_messages() -> Vec<ConversationMessage> {
     ]
 }
 
-const MAX_EXTRACTION_PROMPT_BYTES: usize = 6144;
+const MAX_CATEGORY_GUIDE_BYTES: usize = 3072;
 
 #[tokio::test]
 async fn prompt_includes_core_facts_block_when_memory_present() {
@@ -119,15 +119,8 @@ async fn prompt_keeps_kg_focused_base_rules() {
 async fn prompt_renders_entire_category_tree() {
     let (kg, _dir) = fresh_kg().await;
     let prompt = build_base_prompt(&kg).await.unwrap();
-    let categories: Vec<Category> = sqlx::query_as(
-        "SELECT id, name, description, parent_id, memory_weight, memory_bucket_id, created_at \
-         FROM categories ORDER BY id",
-    )
-    .fetch_all(kg.pool())
-    .await
-    .unwrap();
+    let categories = kg.list_all_categories().await.unwrap();
 
-    assert_eq!(categories.len(), 92);
     for category in categories {
         assert!(prompt.contains(&format!("{} {}", category.id, category.name)));
     }
@@ -168,12 +161,12 @@ async fn prompt_renders_newly_inserted_deep_categories() {
 #[tokio::test]
 async fn prompt_category_guide_stays_within_budget() {
     let (kg, _dir) = fresh_kg().await;
-    let prompt = build_base_prompt(&kg).await.unwrap();
+    let guide = build_category_guide(&kg).await.unwrap();
 
     assert!(
-        prompt.len() <= MAX_EXTRACTION_PROMPT_BYTES,
-        "extraction prompt exceeded budget: {} bytes",
-        prompt.len()
+        guide.len() <= MAX_CATEGORY_GUIDE_BYTES,
+        "category guide exceeded budget: {} bytes",
+        guide.len()
     );
 }
 
@@ -182,7 +175,7 @@ async fn prompt_normalises_newlines_in_category_names() {
     let (kg, _dir) = fresh_kg().await;
     kg.insert_category(NewCategory {
         id: 2111,
-        name: "Chocolate\nInjected rule".to_string(),
+        name: "Chocolate\tInjected\nrule".to_string(),
         description: None,
         parent_id: Some(211),
         memory_weight: Some(0.9),

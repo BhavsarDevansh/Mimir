@@ -1505,9 +1505,23 @@ async fn test_v1_chat_stream_client_disconnect_rolls_back_persisted_turn() {
     // turn back.
     drop(response);
 
-    // Give the stream task time to observe the closed receiver and roll
-    // back before asserting on the session.
-    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    let rolled_back = poll_until(Duration::from_secs(5), || async {
+        let sessions = state.context_manager.list_sessions().await.unwrap();
+        sessions.len() == 1
+            && state
+                .context_manager
+                .export_conversation(sessions[0].id)
+                .await
+                .unwrap()
+                .messages
+                .iter()
+                .all(|message| message.role == "system")
+    })
+    .await;
+    assert!(
+        rolled_back,
+        "cancelled stream did not roll back persisted messages within 5s"
+    );
 
     let sessions = state.context_manager.list_sessions().await.unwrap();
     assert_eq!(sessions.len(), 1, "session created by the request");

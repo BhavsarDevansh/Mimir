@@ -275,6 +275,9 @@ struct EngineInner {
     pending: Mutex<HashMap<String, VecDeque<PendingInstance>>>,
     /// Running instance per hook id (one run at a time per hook).
     running: Mutex<HashMap<String, RunningInstance>>,
+    /// Serialises the running-to-retry transition so settled-state readers
+    /// cannot observe the gap between removing a run and requeueing it.
+    transition: Mutex<()>,
     /// Fired when the dispatch loop exits, so `shutdown` can await the
     /// final in-flight run's terminal `job_runs` write before the caller
     /// tears down the runtime.
@@ -325,6 +328,7 @@ impl HookEngine {
                 hooks: RwLock::new(Vec::new()),
                 pending: Mutex::new(HashMap::new()),
                 running: Mutex::new(HashMap::new()),
+                transition: Mutex::new(()),
                 dispatch_exited: Notify::new(),
                 last_user_activity: StdMutex::new(None),
                 notify: Notify::new(),
@@ -529,6 +533,19 @@ impl HookEngine {
     /// Number of hooks with a running instance.
     pub async fn running_count(&self) -> usize {
         self.inner.running.lock().await.len()
+    }
+
+    /// Whether one hook currently has a running instance.
+    pub async fn is_running(&self, hook_id: &str) -> bool {
+        self.inner.running.lock().await.contains_key(hook_id)
+    }
+
+    /// Whether one hook has no pending instances and is not running.
+    pub async fn is_settled_for(&self, hook_id: &str) -> bool {
+        let _transition = self.inner.transition.lock().await;
+        let pending = self.inner.pending.lock().await;
+        let running = self.inner.running.lock().await;
+        !running.contains_key(hook_id) && pending.get(hook_id).map_or(0, VecDeque::len) == 0
     }
 
     /// Start the dispatch loop.
@@ -755,6 +772,7 @@ impl EngineInner {
             let mut running = self.running.lock().await;
             running.remove(&hook_id).and_then(|r| r.outcome)
         };
+        let transition = self.transition.lock().await;
         match (result, outcome) {
             (Err(JobError::Cancelled), _) => {
                 debug!("hooks: '{hook_id}' run cancelled; dropping instance");
@@ -788,6 +806,7 @@ impl EngineInner {
                 warn!("hooks: '{hook_id}' handler recorded no outcome; dropping instance");
             }
         }
+        drop(transition);
     }
 
     /// Re-enqueue a failed instance with exponential backoff while the retry

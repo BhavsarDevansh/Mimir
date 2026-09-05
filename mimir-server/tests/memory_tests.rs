@@ -130,8 +130,11 @@ async fn test_memory_refresh_already_running_returns_409() {
         let _ = engine.force_run("memory.condensation").await;
     });
 
-    // Give the background task a moment to mark the hook running.
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let running = poll_until(Duration::from_secs(5), || async {
+        state.hook_engine.is_running("memory.condensation").await
+    })
+    .await;
+    assert!(running, "memory condensation hook did not start within 5s");
 
     let response = app
         .oneshot(
@@ -176,8 +179,11 @@ async fn test_memory_refresh_cancelled_returns_409() {
         .unwrap()
     });
 
-    // Give the run a moment to start, then cancel it.
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let running = poll_until(Duration::from_secs(5), || async {
+        state.hook_engine.is_running("memory.condensation").await
+    })
+    .await;
+    assert!(running, "memory condensation hook did not start within 5s");
     assert!(jq.cancel("memory.condensation"));
 
     let response = response_task.await.unwrap();

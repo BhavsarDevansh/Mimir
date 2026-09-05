@@ -9,6 +9,8 @@ The `mimir-server` crate contains integration tests that exercise the full HTTP 
 - SSE content-type headers
 - Queue-depth introspection on `/status`
 
+Server tests synchronise with asynchronous work by polling observable state through the shared `poll_until` helper: hook or job readiness, connector runner state, and persisted message rollbacks. The helper checks every 10 ms inside a bounded timeout, wraps each predicate evaluation in the remaining budget, and avoids fixed sleeps without silently continuing when the expected state never appears. It returns `false` on expiry and the calling test turns that into a descriptive assertion failure. Chat-hook readiness uses a settled-state check that combines pending and running state atomically.
+
 ## HTTP-Level Tests
 
 The `mimir-core` crate contains integration tests that use `wiremock` to verify the real HTTP client behaves correctly:

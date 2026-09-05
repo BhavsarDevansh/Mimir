@@ -20,6 +20,10 @@ These tests exercise the full Axum HTTP stack without making real network calls.
 
 All tests use a temporary directory for the SQLite context database and a fresh `MockLlmClient` instance so they are fully isolated and parallel-safe.
 
+### Server Test Waits (issue #534)
+
+Server integration tests avoid fixed wall-clock waits when synchronising with asynchronous server work. The shared `poll_until` helper probes the asserted observable state—hook running status, job-queue running status, connector supervisor state, or persisted conversation contents—at 10 ms intervals within a bounded timeout, wrapping each predicate evaluation in the remaining budget and capping the polling delay to that budget. `HookEngine::is_running(hook_id)` provides hook-specific readiness, so shared hook waits do not accidentally observe an unrelated running hook. The chat-hook readiness helper additionally uses `HookEngine::is_settled_for(hook_id)` so a failed run cannot appear idle while it is moving from the running map back into the pending queue. If the state is not observed before the timeout, the test fails with the same intent it had before, but without sleeping through a fixed interval on every run.
+
 ## Wiremock HTTP Tests (`mimir-core/tests/llm_http_integration.rs`)
 
 These tests verify the **real** `LlmClient` HTTP layer: request serialisation, retry logic, SSE parsing, and error mapping. They use the `wiremock` crate to stand up a real HTTP server on a random localhost port.

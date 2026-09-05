@@ -41,7 +41,7 @@ impl TestHandler {
     }
 
     fn release(&self) {
-        self.release.notify_waiters();
+        self.release.notify_one();
     }
 }
 
@@ -818,6 +818,35 @@ async fn force_run_executes_handler_with_empty_payload() {
     let summary = engine.force_run("h").await.unwrap();
     assert_eq!(summary.status, crate::job_queue::JobRunStatus::Succeeded);
     assert_eq!(handler.calls(), vec![(String::new(), 1)]);
+}
+
+#[tokio::test]
+async fn is_running_reports_only_the_named_hook() {
+    let (engine, _temp, _shutdown_rx) = test_engine().await;
+    let handler = TestHandler::blocking(vec![HookOutcome::Success]);
+    engine
+        .register(hook(
+            "first",
+            QueuePolicy::Multiple,
+            Gate::Ungated,
+            handler.clone(),
+        ))
+        .await
+        .unwrap();
+
+    let engine_clone = Arc::clone(&engine);
+    let handle = tokio::spawn(async move { engine_clone.force_run("first").await });
+    wait_for_async(|| async { engine.is_running("first").await }).await;
+
+    assert!(engine.is_running("first").await);
+    assert!(!engine.is_running("missing").await);
+    assert!(!engine.is_settled_for("first").await);
+    assert!(engine.is_settled_for("missing").await);
+
+    handler.release();
+    let summary = handle.await.unwrap().unwrap();
+    assert_eq!(summary.status, crate::job_queue::JobRunStatus::Succeeded);
+    assert!(engine.is_settled_for("first").await);
 }
 
 #[tokio::test]

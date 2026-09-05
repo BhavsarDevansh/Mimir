@@ -33,7 +33,7 @@ A predicate tree follows one axis (a predicate has one canonical name and one pa
 
 ## Best practices
 
-- Tag facts with the **most specific** subcategory available at extraction time (the LLM is instructed to assign 1–3 category ids).
+- Tag facts with the **most specific** subcategory available at extraction time (the extraction prompt renders the complete category tree and instructs the LLM to assign 1–3 valid category ids).
 - Add new domain words via `insert_category_alias` rather than inventing new predicates — keep predicates as thin verbs.
 - Use the seeded predicate DAG parents (`employment`, `education`, `residence`, `containment`) for coarse verb generalisation in `kg_query --include-subtree`, and category subtrees for multi-axis grouping and memory ranking.
 - When adding a category outside the seeded taxonomy, set its memory bucket explicitly (`kb category add --memory-bucket-id 4` for a preference) — an unset bucket classifies as General.

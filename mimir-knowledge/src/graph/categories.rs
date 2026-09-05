@@ -13,6 +13,12 @@ impl KnowledgeGraph {
         queries::category::list_categories(&self.pool, parent_id).await
     }
 
+    pub async fn list_all_categories(
+        &self,
+    ) -> Result<Vec<models::category::Category>, KnowledgeError> {
+        queries::category::list_all_categories(&self.pool).await
+    }
+
     pub async fn get_category(
         &self,
         id: i32,

@@ -1,5 +1,6 @@
 use super::*;
 
+use crate::models::category::{Category, NewCategory};
 use mimir_core::conversation::{ConversationMessage, MessageRole};
 
 /// Fresh in-memory-style KnowledgeGraph in a temp dir for prompt tests.
@@ -17,6 +18,8 @@ fn sample_messages() -> Vec<ConversationMessage> {
         ConversationMessage::assistant("Berlin is a great city!"),
     ]
 }
+
+const MAX_EXTRACTION_PROMPT_BYTES: usize = 6144;
 
 #[tokio::test]
 async fn prompt_includes_core_facts_block_when_memory_present() {
@@ -110,6 +113,87 @@ async fn prompt_keeps_kg_focused_base_rules() {
     assert!(prompt.contains("'remember' tool"));
     assert!(prompt.contains("Predicate standards"));
     assert!(prompt.contains("Categorisation Guide"));
+}
+
+#[tokio::test]
+async fn prompt_renders_entire_category_tree() {
+    let (kg, _dir) = fresh_kg().await;
+    let prompt = build_base_prompt(&kg).await.unwrap();
+    let categories: Vec<Category> = sqlx::query_as(
+        "SELECT id, name, description, parent_id, memory_weight, memory_bucket_id, created_at \
+         FROM categories ORDER BY id",
+    )
+    .fetch_all(kg.pool())
+    .await
+    .unwrap();
+
+    assert_eq!(categories.len(), 92);
+    for category in categories {
+        assert!(prompt.contains(&format!("{} {}", category.id, category.name)));
+    }
+}
+
+#[tokio::test]
+async fn prompt_renders_category_descendants_with_indentation() {
+    let (kg, _dir) = fresh_kg().await;
+    let prompt = build_base_prompt(&kg).await.unwrap();
+
+    assert!(prompt.contains("\n200 Food & Drink\n"));
+    assert!(prompt.contains("\n  210 Tastes & Favourites\n"));
+    assert!(prompt.contains("\n    211 Sweet Foods\n"));
+    assert!(prompt.contains("\n    212 Savoury Foods\n"));
+    assert!(prompt.contains("\n700 Entertainment & Leisure\n"));
+    assert!(prompt.contains("\n  740 Gaming\n"));
+    assert!(prompt.contains("\n    741 Video Games\n"));
+    assert!(prompt.contains("\n    742 Board Games\n"));
+}
+
+#[tokio::test]
+async fn prompt_renders_newly_inserted_deep_categories() {
+    let (kg, _dir) = fresh_kg().await;
+    let category = NewCategory {
+        id: 2110,
+        name: "Chocolate".to_string(),
+        description: Some("Cocoa and chocolate-based treats".to_string()),
+        parent_id: Some(211),
+        memory_weight: Some(0.9),
+        memory_bucket_id: Some(4),
+    };
+    kg.insert_category(category).await.unwrap();
+    let prompt = build_base_prompt(&kg).await.unwrap();
+
+    assert!(prompt.contains("\n      2110 Chocolate\n"));
+}
+
+#[tokio::test]
+async fn prompt_category_guide_stays_within_budget() {
+    let (kg, _dir) = fresh_kg().await;
+    let prompt = build_base_prompt(&kg).await.unwrap();
+
+    assert!(
+        prompt.len() <= MAX_EXTRACTION_PROMPT_BYTES,
+        "extraction prompt exceeded budget: {} bytes",
+        prompt.len()
+    );
+}
+
+#[tokio::test]
+async fn prompt_normalises_newlines_in_category_names() {
+    let (kg, _dir) = fresh_kg().await;
+    kg.insert_category(NewCategory {
+        id: 2111,
+        name: "Chocolate\nInjected rule".to_string(),
+        description: None,
+        parent_id: Some(211),
+        memory_weight: Some(0.9),
+        memory_bucket_id: Some(4),
+    })
+    .await
+    .unwrap();
+    let prompt = build_base_prompt(&kg).await.unwrap();
+
+    assert!(prompt.contains("2111 Chocolate Injected rule"));
+    assert!(!prompt.contains("2111 Chocolate\nInjected rule"));
 }
 
 #[tokio::test]

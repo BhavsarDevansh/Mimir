@@ -41,7 +41,7 @@ impl TestHandler {
     }
 
     fn release(&self) {
-        self.release.notify_waiters();
+        self.release.notify_one();
     }
 }
 
@@ -840,10 +840,13 @@ async fn is_running_reports_only_the_named_hook() {
 
     assert!(engine.is_running("first").await);
     assert!(!engine.is_running("missing").await);
+    assert!(!engine.is_settled_for("first").await);
+    assert!(engine.is_settled_for("missing").await);
 
     handler.release();
     let summary = handle.await.unwrap().unwrap();
     assert_eq!(summary.status, crate::job_queue::JobRunStatus::Succeeded);
+    assert!(engine.is_settled_for("first").await);
 }
 
 #[tokio::test]

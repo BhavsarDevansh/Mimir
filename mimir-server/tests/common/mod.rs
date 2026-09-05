@@ -425,10 +425,7 @@ pub async fn wait_for_chat_hook_idle(state: &Arc<AppState>) {
     let state = Arc::clone(state);
     let drained = poll_until(Duration::from_secs(5), move || {
         let state = Arc::clone(&state);
-        async move {
-            state.hook_engine.pending_depth_for("remember.chat").await == 0
-                && !state.hook_engine.is_running("remember.chat").await
-        }
+        async move { state.hook_engine.is_settled_for("remember.chat").await }
     })
     .await;
     assert!(drained, "remember.chat hook did not drain within 5s");
@@ -442,14 +439,22 @@ where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = bool>,
 {
-    let deadline = Instant::now() + timeout;
+    let deadline = tokio::time::Instant::now() + timeout;
     loop {
-        if predicate().await {
-            return true;
-        }
-        if Instant::now() >= deadline {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
             return false;
         }
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        if tokio::time::timeout(remaining, predicate())
+            .await
+            .unwrap_or(false)
+        {
+            return true;
+        }
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(10).min(remaining)).await;
     }
 }

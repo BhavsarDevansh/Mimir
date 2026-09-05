@@ -89,7 +89,7 @@ Each hook has a `RetryPolicy { max_attempts, backoff }`. A handler returns `Hook
 - `trigger(Trigger)` — enqueues (or drops / replaces) an instance for every registered hook matching the trigger kind; returns per-hook `TriggerOutcome` (`Enqueued` / `Dropped` / `Replaced`).
 - `notify_user_activity()` — resets the cooldown for idle-gated hooks.
 - `force_run(hook_id)` — runs a hook immediately with an empty `()` payload, bypassing all gates; errors with `NotRegistered` / `AlreadyRunning`.
-- `pending_depth()` / `pending_depth_for(hook_id)` / `running_count()` / `is_running(hook_id)` — observability; `pending_depth` is surfaced in `GET /status` as `hook_queue_depth`.
+- `pending_depth()` / `pending_depth_for(hook_id)` / `running_count()` / `is_running(hook_id)` / `is_settled_for(hook_id)` — observability; `pending_depth` is surfaced in `GET /status` as `hook_queue_depth`, and `is_settled_for` reads the pending and running state in one settled-state predicate.
 - `start(shutdown_rx)` — the single dispatch loop; runs until the shutdown watch channel fires.
 - `shutdown()` — signals the loop and cancels the in-flight hook run.
 

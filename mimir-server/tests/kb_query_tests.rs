@@ -139,7 +139,7 @@ async fn test_kb_optimization_run_now_cancelled_returns_409() {
         .unwrap()
     });
 
-    let running = poll_until(Duration::from_millis(5_000), || async {
+    let running = poll_until(Duration::from_secs(5), || async {
         state.job_queue.is_running("knowledge.optimization").await
     })
     .await;

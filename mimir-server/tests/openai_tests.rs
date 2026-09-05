@@ -1505,7 +1505,7 @@ async fn test_v1_chat_stream_client_disconnect_rolls_back_persisted_turn() {
     // turn back.
     drop(response);
 
-    let rolled_back = poll_until(Duration::from_millis(5_000), || async {
+    let rolled_back = poll_until(Duration::from_secs(5), || async {
         let sessions = state.context_manager.list_sessions().await.unwrap();
         sessions.len() == 1
             && state

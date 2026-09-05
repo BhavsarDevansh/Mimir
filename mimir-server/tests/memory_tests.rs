@@ -130,8 +130,8 @@ async fn test_memory_refresh_already_running_returns_409() {
         let _ = engine.force_run("memory.condensation").await;
     });
 
-    let running = poll_until(Duration::from_millis(5_000), || async {
-        state.hook_engine.running_count().await > 0
+    let running = poll_until(Duration::from_secs(5), || async {
+        state.hook_engine.is_running("memory.condensation").await
     })
     .await;
     assert!(running, "memory condensation hook did not start within 5s");
@@ -179,8 +179,8 @@ async fn test_memory_refresh_cancelled_returns_409() {
         .unwrap()
     });
 
-    let running = poll_until(Duration::from_millis(5_000), || async {
-        state.hook_engine.running_count().await > 0
+    let running = poll_until(Duration::from_secs(5), || async {
+        state.hook_engine.is_running("memory.condensation").await
     })
     .await;
     assert!(running, "memory condensation hook did not start within 5s");

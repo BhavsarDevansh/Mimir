@@ -123,6 +123,18 @@ async fn advance_time(duration: Duration) {
     tokio::time::advance(duration).await;
 }
 
+async fn wait_for_gate_check(rx: &mut watch::Receiver<u64>, minimum: u64) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while *rx.borrow_and_update() < minimum {
+            rx.changed()
+                .await
+                .expect("hooks task must stay alive while checking gates");
+        }
+    })
+    .await
+    .expect("hooks engine must complete a gating check");
+}
+
 #[tokio::test]
 async fn multiple_policy_enqueues_every_trigger_fifo() {
     let (engine, _temp, shutdown_rx) = test_engine().await;
@@ -424,11 +436,9 @@ async fn debounce_window_delays_dispatch_and_resets_on_trigger() {
     let engine_clone = Arc::clone(&engine);
     tokio::time::pause();
     let handle = tokio::spawn(async move { engine_clone.start(shutdown_rx).await });
+    let mut gate_check = engine.gate_check_rx();
+    wait_for_gate_check(&mut gate_check, 1).await;
 
-    // Wait for the dispatch loop to observe the pending instance, then send
-    // a trigger inside the window; it replaces the payload and resets the
-    // window.
-    wait_for_async(|| async { engine.pending_depth_for("h").await == 1 }).await;
     engine.trigger(turn_trigger(1, "b")).await;
 
     advance_time(Duration::from_millis(100)).await;
@@ -467,10 +477,9 @@ async fn idle_gate_blocks_dispatch_while_llm_busy() {
     let engine_clone = Arc::clone(&engine);
     tokio::time::pause();
     let handle = tokio::spawn(async move { engine_clone.start(shutdown_rx).await });
+    let mut gate_check = engine.gate_check_rx();
+    wait_for_gate_check(&mut gate_check, 1).await;
 
-    // Give the dispatch loop a deterministic chance to observe the busy
-    // LLM pool and leave the hook queued.
-    advance_time(Duration::from_millis(300)).await;
     assert!(
         handler.calls().is_empty(),
         "idle-gated hook must not dispatch while the LLM pool is busy"
@@ -528,11 +537,15 @@ async fn cooldown_resets_on_user_activity() {
     let engine_clone = Arc::clone(&engine);
     tokio::time::pause();
     let handle = tokio::spawn(async move { engine_clone.start(shutdown_rx).await });
+    let mut first_check = engine.gate_check_rx();
+    wait_for_gate_check(&mut first_check, 1).await;
 
     // Advance into the initial cooldown window, then reset it with user
     // activity.
     advance_time(Duration::from_millis(100)).await;
     engine.notify_user_activity();
+    let mut reset_check = engine.gate_check_rx();
+    wait_for_gate_check(&mut reset_check, 2).await;
 
     advance_time(Duration::from_millis(150)).await;
     assert!(

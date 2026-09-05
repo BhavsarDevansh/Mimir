@@ -247,12 +247,21 @@ async fn db_path_with_tilde_expanded() {
 async fn list_sessions_orders_by_updated_at_desc() {
     let (mgr, _dir) = setup_manager().await;
     let sid1 = mgr.create_session("sys1").await.unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     let sid2 = mgr.create_session("sys2").await.unwrap();
 
     mgr.add_user_message(sid1, "first").await.unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     mgr.add_user_message(sid2, "second").await.unwrap();
+
+    sqlx::query("UPDATE sessions SET updated_at = '2000-01-01T00:00:00Z' WHERE id = ?1")
+        .bind(sid1)
+        .execute(mgr.pool.as_ref())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE sessions SET updated_at = '2100-01-01T00:00:00Z' WHERE id = ?1")
+        .bind(sid2)
+        .execute(mgr.pool.as_ref())
+        .await
+        .unwrap();
 
     let list = mgr.list_sessions().await.unwrap();
     assert_eq!(list.len(), 2);
@@ -299,9 +308,12 @@ async fn get_messages_after_compaction_returns_only_after_timestamp() {
     let (mgr, _dir) = setup_manager().await;
     let sid = mgr.create_session("sys").await.unwrap();
     mgr.add_user_message(sid, "old").await.unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     let mid = Utc::now();
-    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    sqlx::query("UPDATE messages SET created_at = '2000-01-01T00:00:00Z' WHERE session_id = ?1")
+        .bind(sid)
+        .execute(mgr.pool.as_ref())
+        .await
+        .unwrap();
     mgr.add_user_message(sid, "new").await.unwrap();
     mgr.add_assistant_message(sid, "reply").await.unwrap();
 

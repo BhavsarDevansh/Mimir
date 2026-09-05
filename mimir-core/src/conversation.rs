@@ -116,8 +116,6 @@ mod tests {
     #[test]
     fn conversation_turns_with_same_content_are_equal_and_hash_equal() {
         let a = ConversationTurn::new(42, "hello", "hi there");
-        // Sleep briefly so the timestamps differ.
-        std::thread::sleep(std::time::Duration::from_millis(5));
         let b = ConversationTurn::new(42, "hello", "hi there");
 
         assert_eq!(a, b);

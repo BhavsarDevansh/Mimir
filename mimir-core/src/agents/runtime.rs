@@ -38,18 +38,40 @@ impl PendingKey {
 ///
 /// Registers agents, dedupes by `(agent kind, goal)`, and dispatches them on
 /// background tasks.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct AgentRuntime {
     agents: Arc<Mutex<Vec<(String, BoxedAgent)>>>,
     pending: Arc<Mutex<HashSet<PendingKey>>>,
+    /// Test-only signal: a dispatched agent task has completed or panicked.
+    #[cfg(test)]
+    task_exited: Arc<tokio::sync::Notify>,
+}
+
+impl Default for AgentRuntime {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AgentRuntime {
+    /// Wait for the next test-observed agent task exit.
+    #[cfg(test)]
+    pub async fn wait_task_exit(&self) {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            self.task_exited.notified(),
+        )
+        .await
+        .expect("agent runtime task must finish within five seconds");
+    }
+
     /// Create a new runtime.
     pub fn new() -> Self {
         Self {
             agents: Arc::new(Mutex::new(Vec::new())),
             pending: Arc::new(Mutex::new(HashSet::new())),
+            #[cfg(test)]
+            task_exited: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
@@ -107,6 +129,8 @@ impl AgentRuntime {
         };
 
         let pending = Arc::clone(&self.pending);
+        #[cfg(test)]
+        let task_exited = Arc::clone(&self.task_exited);
         tokio::spawn(async move {
             let task = tokio::spawn(async move {
                 let agent = agent
@@ -121,6 +145,8 @@ impl AgentRuntime {
                 Ok(Err(e)) => warn!("AgentRuntime: {} failed: {}", kind, e),
                 Err(_) => warn!("AgentRuntime: {} panicked", kind),
             }
+            #[cfg(test)]
+            task_exited.notify_one();
         });
 
         true
@@ -190,7 +216,7 @@ mod tests {
             .submit::<TestAgent>(TestGoal("a".into()), Arc::new(EmptyCtx))
             .await;
         assert!(queued);
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        runtime.wait_task_exit().await;
         assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
 
@@ -211,7 +237,7 @@ mod tests {
             .await;
         assert!(queued1);
         assert!(!queued2);
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        runtime.wait_task_exit().await;
         assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
 
@@ -230,7 +256,8 @@ mod tests {
         runtime
             .submit::<TestAgent>(TestGoal("b".into()), Arc::new(EmptyCtx))
             .await;
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        runtime.wait_task_exit().await;
+        runtime.wait_task_exit().await;
         assert_eq!(counter.load(Ordering::SeqCst), 2);
     }
 
@@ -242,7 +269,7 @@ mod tests {
             .submit::<PanicAgent>(TestGoal("a".into()), Arc::new(EmptyCtx))
             .await;
         assert!(queued1);
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        runtime.wait_task_exit().await;
         let queued2 = runtime
             .submit::<PanicAgent>(TestGoal("a".into()), Arc::new(EmptyCtx))
             .await;

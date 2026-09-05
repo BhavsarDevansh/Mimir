@@ -43,6 +43,9 @@ struct PoolInner {
     shutdown_tx: watch::Sender<bool>,
     handles: Mutex<Vec<tokio::task::JoinHandle<()>>>,
     in_flight: AtomicUsize,
+    /// Test-only signal: a worker has claimed a job and entered its guard.
+    #[cfg(test)]
+    job_started: Notify,
 }
 
 /// Guard that increments `in_flight` on creation and decrements on drop.

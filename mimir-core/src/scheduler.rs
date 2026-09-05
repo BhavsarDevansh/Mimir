@@ -184,8 +184,6 @@ impl BackgroundScheduler {
         let mut next_scheduled_check = tokio::time::Instant::now() + Duration::from_secs(60);
 
         loop {
-            #[cfg(test)]
-            self.loop_checked.notify_waiters();
             let now_ts = chrono::Utc::now().timestamp_millis() as u64;
             let last_submit = self.last_submit_time.load(Ordering::Relaxed);
             let debounce_ms = self.debounce.as_millis() as u64;
@@ -212,6 +210,9 @@ impl BackgroundScheduler {
             } else {
                 false
             };
+
+            #[cfg(test)]
+            self.loop_checked.notify_waiters();
 
             if has_pending && debounce_elapsed && cooldown_elapsed && llm_idle {
                 if let Some(job) = next_job {
@@ -467,7 +468,7 @@ mod tests {
             .expect("scheduler must check the queued job before shutdown");
         wait_until_elapsed(
             sched.last_user_activity.load(Ordering::Relaxed),
-            Duration::from_millis(10),
+            Duration::from_millis(185),
         )
         .await;
 
@@ -483,6 +484,13 @@ mod tests {
         timeout(Duration::from_secs(5), second_check)
             .await
             .expect("scheduler must re-check after user activity");
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        sched.submit(DaemonJob::KnowledgeOptimization).await;
+        let reset_check = sched.loop_checked.notified();
+        timeout(Duration::from_secs(5), reset_check)
+            .await
+            .expect("scheduler must re-check after the original cooldown expires");
 
         // Still pending because cooldown reset.
         let pending = sched.pending.lock().await;

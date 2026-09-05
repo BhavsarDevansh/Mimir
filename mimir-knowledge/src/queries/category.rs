@@ -83,6 +83,11 @@ pub async fn insert_category(
     new: &NewCategory,
     _now: DateTime<Utc>,
 ) -> Result<Category, KnowledgeError> {
+    if new.parent_id == Some(new.id) {
+        return Err(KnowledgeError::Validation(
+            "Category cannot be its own parent".to_string(),
+        ));
+    }
     if let Some(bucket_id) = new.memory_bucket_id {
         if MemoryBucket::try_from(bucket_id).is_err() {
             return Err(KnowledgeError::Validation(format!(

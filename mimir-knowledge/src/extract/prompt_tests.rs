@@ -159,6 +159,25 @@ async fn prompt_renders_newly_inserted_deep_categories() {
 }
 
 #[tokio::test]
+async fn insert_category_rejects_self_parent() {
+    let (kg, _dir) = fresh_kg().await;
+    let result = kg
+        .insert_category(NewCategory {
+            id: 2112,
+            name: "Self Parent".to_string(),
+            description: None,
+            parent_id: Some(2112),
+            memory_weight: Some(0.9),
+            memory_bucket_id: Some(4),
+        })
+        .await
+        .unwrap_err();
+
+    assert!(matches!(result, KnowledgeError::Validation(_)));
+    assert!(result.to_string().contains("cannot be its own parent"));
+}
+
+#[tokio::test]
 async fn prompt_category_guide_stays_within_budget() {
     let (kg, _dir) = fresh_kg().await;
     let guide = build_category_guide(&kg).await.unwrap();

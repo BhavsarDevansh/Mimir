@@ -12,6 +12,7 @@
 | Documentation | Public API and extraction behaviour were not documented for full-tree rendering. | Low | Updated README, technical schema/pipeline/librarian docs, wiki user docs, and current-capability status. |
 | Test quality | The new test duplicated the migration seed count, and the prompt-size budget measured the fixed rules rather than the DB-driven category guide. | Low | Removed the seed-count assertion, reused the graph API in the test, and asserted the category guide's own budget. |
 | Security | Replacing only carriage returns and line feeds left other whitespace control characters in category guide lines. | Low | Normalised all runs of Unicode whitespace while preserving the category name text. |
+| Taxonomy correctness | A self-parenting category could be inserted, then be omitted from the root-first category guide. | Low | Rejected `parent_id == id` in `insert_category` before the database write and added regression coverage. |
 
 ## Result
 

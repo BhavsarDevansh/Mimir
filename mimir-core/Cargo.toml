@@ -40,7 +40,7 @@ rustix = { version = "1.1", features = ["process"] }
 [dev-dependencies]
 tempfile = "3"
 serial_test = "3"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "process", "sync", "net"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "process", "sync", "net", "test-util"] }
 dashmap = "6.2"
 wiremock = "0.6.5"
 criterion = { version = "0.8.2", features = ["async_tokio"] }

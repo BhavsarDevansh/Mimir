@@ -35,6 +35,7 @@ scripts/tests/rustdoc_test.sh
 - The calendar knowledge-graph integration tests are deterministic under parallel load: they wait for the events-subsystem overlay (`get_event_by_fact`) instead of the bare fact list, and drive the tombstone cycle via `trigger_sync_by_slug` — closing the initial-cycle and tombstone-cycle races that previously made `calendar_kb_tests` flaky in full-suite runs (issues #320, #367).
 - The workspace suite is isolated from the developer's real install (issue #384): the daemon-down CLI tests probe the never-bindable loopback port 0 with temp HOME/XDG instead of the default base URL, every daemon-spawning test runs against temp DBs with an injected API token, and the in-process `TestDaemon` / server-task fixtures kill their server on drop so a panicking test cannot leak a daemon that locks the real `knowledge.db`/`jobs.db` or holds a port.
 - Retry tests can inject short schedules instead of sleeping through production backoff: the LLM client accepts a positive-attempt `RetryConfig`, and connector HTTP tests bound `Retry-After` to the injected strategy cap (issue #531).
+- Core hook and scheduler tests now synchronise on readiness signals, pending-state polling, or Tokio mock time instead of multi-hundred-millisecond wall-clock sleeps (issue #533), making the timing-window tests deterministic and faster.
 
 ## Use cases
 

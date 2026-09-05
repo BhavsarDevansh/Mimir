@@ -87,7 +87,7 @@ schedule_time = "02:00"
 
 ## Testing
 
-The scheduler and queue tests use cancellation tokens, explicit start signals, and bounded timeouts instead of polling loops or long sleeps so the assertions follow the actual dispatch and cancellation lifecycle. Scheduler timing stays on the production wall-clock path because jobs run on dedicated threads; this avoids coupling those tests to Tokio's paused-time clock.
+The scheduler and queue tests use cancellation tokens, explicit start signals, a test-only dispatch-loop check signal, bounded timestamp polling, and bounded timeouts instead of long sleeps so the assertions follow the actual dispatch and cancellation lifecycle. Scheduler timing stays on the production wall-clock path because jobs run on dedicated threads; this avoids coupling those tests to Tokio's paused-time clock.
 
 ## Integration
 

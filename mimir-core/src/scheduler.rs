@@ -70,6 +70,9 @@ pub struct BackgroundScheduler {
     last_submit_time: AtomicU64,
     job_notify: Notify,
     user_notify: Notify,
+    /// Test-only signal: the dispatch loop has completed one gating check.
+    #[cfg(test)]
+    loop_checked: Notify,
     debounce: Duration,
     cooldown: Duration,
     shutdown_tx: tokio::sync::watch::Sender<bool>,
@@ -96,6 +99,8 @@ impl BackgroundScheduler {
             last_submit_time: AtomicU64::new(0),
             job_notify: Notify::new(),
             user_notify: Notify::new(),
+            #[cfg(test)]
+            loop_checked: Notify::new(),
             debounce,
             cooldown,
             shutdown_tx,
@@ -179,6 +184,8 @@ impl BackgroundScheduler {
         let mut next_scheduled_check = tokio::time::Instant::now() + Duration::from_secs(60);
 
         loop {
+            #[cfg(test)]
+            self.loop_checked.notify_waiters();
             let now_ts = chrono::Utc::now().timestamp_millis() as u64;
             let last_submit = self.last_submit_time.load(Ordering::Relaxed);
             let debounce_ms = self.debounce.as_millis() as u64;
@@ -325,6 +332,22 @@ mod tests {
     use tokio::sync::Notify;
     use tokio::time::timeout;
 
+    /// Wait on the real clock for the scheduler's cooldown baseline to age
+    /// far enough to enter the next test phase. The polling interval stays
+    /// short so the assertion observes the scheduler's own timestamps.
+    async fn wait_until_elapsed(started_at_ms: u64, minimum: Duration) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let elapsed_ms =
+            || (chrono::Utc::now().timestamp_millis() as u64).saturating_sub(started_at_ms);
+        while elapsed_ms() < minimum.as_millis() as u64 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "cooldown baseline did not age within 5 seconds"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
     async fn test_job_queue() -> (Arc<JobQueue>, tempfile::TempDir, Arc<Notify>) {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("jobs.db");
@@ -425,34 +448,41 @@ mod tests {
     async fn test_user_activity_resets_cooldown() {
         let (jq, _temp, _job_started) = test_job_queue().await;
         let llm = Arc::new(MockLlmClient::builder().build());
-        let (sched, shutdown_rx) = BackgroundScheduler::new(
-            jq,
-            llm,
-            Duration::from_millis(50),
-            Duration::from_millis(200),
-        );
+        let (sched, shutdown_rx) =
+            BackgroundScheduler::new(jq, llm, Duration::ZERO, Duration::from_millis(200));
 
         // Seed initial user activity so cooldown is active from the start.
         sched.notify_user_activity();
 
         // Submit and start scheduler.
         sched.submit(DaemonJob::KnowledgeOptimization).await;
+        let first_check = sched.loop_checked.notified();
         let sched_clone = Arc::clone(&sched);
         let handle = tokio::spawn(async move {
             sched_clone.start(shutdown_rx).await;
         });
 
-        // Wait past debounce but within cooldown.
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        timeout(Duration::from_secs(5), first_check)
+            .await
+            .expect("scheduler must check the queued job before shutdown");
+        wait_until_elapsed(
+            sched.last_user_activity.load(Ordering::Relaxed),
+            Duration::from_millis(10),
+        )
+        .await;
 
         // Job should still be pending because cooldown hasn't elapsed.
         let pending = sched.pending.lock().await;
         assert!(pending.contains(&DaemonJob::KnowledgeOptimization));
         drop(pending);
 
+        let second_check = sched.loop_checked.notified();
+
         // Simulate user activity.
         sched.notify_user_activity();
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        timeout(Duration::from_secs(5), second_check)
+            .await
+            .expect("scheduler must re-check after user activity");
 
         // Still pending because cooldown reset.
         let pending = sched.pending.lock().await;
@@ -466,21 +496,19 @@ mod tests {
     async fn test_llm_busy_blocks_dispatch() {
         let (jq, _temp, _job_started) = test_job_queue().await;
         let llm = Arc::new(MockLlmClient::builder().in_flight_count(1).build());
-        let (sched, shutdown_rx) = BackgroundScheduler::new(
-            jq,
-            llm,
-            Duration::from_millis(50),
-            Duration::from_millis(50),
-        );
+        let (sched, shutdown_rx) =
+            BackgroundScheduler::new(jq, llm, Duration::ZERO, Duration::ZERO);
 
         sched.submit(DaemonJob::KnowledgeOptimization).await;
+        let first_check = sched.loop_checked.notified();
         let sched_clone = Arc::clone(&sched);
         let handle = tokio::spawn(async move {
             sched_clone.start(shutdown_rx).await;
         });
 
-        // Wait past debounce + cooldown.
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        timeout(Duration::from_secs(5), first_check)
+            .await
+            .expect("scheduler must check the queued job");
 
         // LLM is "busy" so job should still be pending.
         let pending = sched.pending.lock().await;

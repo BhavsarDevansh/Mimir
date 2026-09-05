@@ -119,6 +119,10 @@ where
     }
 }
 
+async fn advance_time(duration: Duration) {
+    tokio::time::advance(duration).await;
+}
+
 #[tokio::test]
 async fn multiple_policy_enqueues_every_trigger_fifo() {
     let (engine, _temp, shutdown_rx) = test_engine().await;
@@ -418,14 +422,16 @@ async fn debounce_window_delays_dispatch_and_resets_on_trigger() {
 
     engine.trigger(turn_trigger(1, "a")).await;
     let engine_clone = Arc::clone(&engine);
+    tokio::time::pause();
     let handle = tokio::spawn(async move { engine_clone.start(shutdown_rx).await });
 
-    // A trigger inside the window replaces the payload and resets the window.
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    // Wait for the dispatch loop to observe the pending instance, then send
+    // a trigger inside the window; it replaces the payload and resets the
+    // window.
+    wait_for_async(|| async { engine.pending_depth_for("h").await == 1 }).await;
     engine.trigger(turn_trigger(1, "b")).await;
 
-    // 100 ms after the second trigger the window has not elapsed.
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    advance_time(Duration::from_millis(100)).await;
     assert!(
         handler.calls().is_empty(),
         "debounce window must delay dispatch"
@@ -459,9 +465,12 @@ async fn idle_gate_blocks_dispatch_while_llm_busy() {
 
     engine.trigger(turn_trigger(1, "a")).await;
     let engine_clone = Arc::clone(&engine);
+    tokio::time::pause();
     let handle = tokio::spawn(async move { engine_clone.start(shutdown_rx).await });
 
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    // Give the dispatch loop a deterministic chance to observe the busy
+    // LLM pool and leave the hook queued.
+    advance_time(Duration::from_millis(300)).await;
     assert!(
         handler.calls().is_empty(),
         "idle-gated hook must not dispatch while the LLM pool is busy"
@@ -517,13 +526,15 @@ async fn cooldown_resets_on_user_activity() {
     engine.notify_user_activity();
     engine.trigger(turn_trigger(1, "a")).await;
     let engine_clone = Arc::clone(&engine);
+    tokio::time::pause();
     let handle = tokio::spawn(async move { engine_clone.start(shutdown_rx).await });
 
-    // User activity inside the cooldown window resets it.
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // Advance into the initial cooldown window, then reset it with user
+    // activity.
+    advance_time(Duration::from_millis(100)).await;
     engine.notify_user_activity();
 
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    advance_time(Duration::from_millis(150)).await;
     assert!(
         handler.calls().is_empty(),
         "cooldown must block dispatch after user activity"

@@ -284,6 +284,7 @@ async fn test_pool_spawns_exactly_configured_workers() {
 async fn test_in_flight_counter_tracks_active_jobs() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let (response_gate_tx, response_gate_rx) = tokio::sync::oneshot::channel();
 
     tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
@@ -296,6 +297,7 @@ async fn test_in_flight_counter_tracks_active_jobs() {
             body.len(),
             body
         );
+        response_gate_rx.await.unwrap();
         let _ = stream.write_all(response.as_bytes()).await;
     });
 
@@ -321,6 +323,9 @@ async fn test_in_flight_counter_tracks_active_jobs() {
 
     wait_for_job_started(&pool).await;
     assert_eq!(pool.in_flight_count(), 1);
+    response_gate_tx
+        .send(())
+        .expect("response gate receiver must stay alive until the assertion completes");
 
     // Wait for the job to complete.
     let _ = job.await.unwrap();

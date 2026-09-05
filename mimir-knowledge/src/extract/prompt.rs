@@ -3,27 +3,76 @@
 use mimir_core::conversation::ConversationMessage;
 use mimir_core::personality::Personality;
 
+use std::collections::{HashMap, HashSet};
+
+use crate::models::category::Category;
 use crate::{KnowledgeError, KnowledgeGraph};
 
-/// predicate standards, list splitting, within-output deduplication, and the
-/// output contract.
+/// Render a category name as one prompt-safe line.
+fn category_display_name(name: &str) -> String {
+    name.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Render every category and its descendants for the extraction prompt.
+///
+/// The guide is DB-driven so taxonomy changes cannot silently diverge from the
+/// categories the model is allowed to use.
+async fn build_category_guide(kg: &KnowledgeGraph) -> Result<String, KnowledgeError> {
+    let categories = kg.list_all_categories().await?;
+    let mut children_by_parent: HashMap<Option<i32>, Vec<&Category>> = HashMap::new();
+    for category in &categories {
+        children_by_parent
+            .entry(category.parent_id)
+            .or_default()
+            .push(category);
+    }
+    let mut guide = String::from("Categorisation Guide:\n");
+    let mut visited = HashSet::new();
+    let mut stack: Vec<(&Category, usize)> = children_by_parent
+        .get(&None)
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+        .iter()
+        .rev()
+        .map(|category| (*category, 0))
+        .collect();
+
+    while let Some((category, depth)) = stack.pop() {
+        if !visited.insert(category.id) {
+            continue;
+        }
+
+        for _ in 0..depth {
+            guide.push_str("  ");
+        }
+        guide.push_str(&format!(
+            "{} {}\n",
+            category.id,
+            category_display_name(&category.name)
+        ));
+
+        let children = children_by_parent
+            .get(&Some(category.id))
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        for child in children.iter().rev() {
+            stack.push((child, depth + 1));
+        }
+    }
+
+    Ok(guide)
+}
+
+/// Build the KG-focused extraction rules, category guide, and output contract.
 ///
 /// Shared by the simple [`extract_facts`] path (no contextual inputs) and the
 /// rich [`build_extraction_prompt`] (which layers the core-facts block and
 /// recent conversation on top).
 pub(super) async fn build_base_prompt(kg: &KnowledgeGraph) -> Result<String, KnowledgeError> {
-    let roots = kg.list_categories(None).await?;
-    let mut guide = String::from("Categorisation Guide:\n");
-    for root in roots {
-        guide.push_str(&format!("{} {}\n", root.id, root.name));
-        let children = kg.list_categories(Some(root.id)).await?;
-        for child in children {
-            guide.push_str(&format!("  {} {}\n", child.id, child.name));
-        }
-    }
+    let guide = build_category_guide(kg).await?;
 
     Ok(format!(
-        "You are a fact extractor. Read the user message and emit structured facts via the 'remember' tool.\n\n### Rules\n- Classify each fact as Explicit, Casual, or Correction.\n- For Corrections, set correction_scope to 'always' or an ISO-8601 datetime.\n- Flag health, financial, relationship, religious, political, or legal facts as is_sensitive=true. Mimir will validate your assessment in Rust.\n- Subject and object types must be one of: Person, Place, Event, Object, Concept, Organization, Activity, DateTime.\n- Assign 1-3 category IDs from the guide below to each fact. Use the MOST specific sub-category available.\n- Emit one fact per list item.\n{}\n### Predicate standards (critical)\nUse the EXACT predicate name below for the matching scenario. Do NOT invent synonyms.\n- Education\n  * Where someone studied   → studied_at (NOT 'attended')\n  * What someone studied    → studied\n  * Degree completed        → completed_degree\n  * Degree status           → educational_status\n- Employment\n  * Employer                → works_at\n  * Job title               → job_title\n  * Profession              → works_as\n- Residence\n  * Current city/country    → resides_in\n  * Previous city           → resides_in (with valid_until)\n- Personal\n  * Hobby (one per fact)    → hobby (NOT 'hobbies')\n  * Favourite thing         → favourite_{{thing}}\n  * Name                    → has_name\n  * Preferred name          → preferred_name\n  * Pet ownership           → has_pets\n- Family\n  * Sibling                 → has_sibling\n  * Partner                 → has_partner\n  * Parent                  → has_parent\n  * Child                   → has_child\n### Deduplication\nBefore emitting a fact, ask yourself: 'Have I already emitted a fact with the same subject and the same meaning?' If yes, do not emit the duplicate — instead strengthen the confidence by marking it Explicit.\nExample: If you already emitted studied_at='University of Auckland', do NOT also emit attended='University of Auckland'.\n### Output\nEmit ONLY via the 'remember' tool. Do not output free text.",
+        "You are a fact extractor. Read the user message and emit structured facts via the 'remember' tool.\n\n### Rules\n- Classify each fact as Explicit, Casual, or Correction.\n- For Corrections, set correction_scope to 'always' or an ISO-8601 datetime.\n- Flag health, financial, relationship, religious, political, or legal facts as is_sensitive=true. Mimir will validate your assessment in Rust.\n- Subject and object types must be one of: Person, Place, Event, Object, Concept, Organization, Activity, DateTime.\n- Assign 1-3 valid category IDs from the guide below to each fact. Use the MOST specific sub-category available.\n- Emit one fact per list item.\n{}\n### Predicate standards (critical)\nUse the EXACT predicate name below for the matching scenario. Do NOT invent synonyms.\n- Education\n  * Where someone studied   → studied_at (NOT 'attended')\n  * What someone studied    → studied\n  * Degree completed        → completed_degree\n  * Degree status           → educational_status\n- Employment\n  * Employer                → works_at\n  * Job title               → job_title\n  * Profession              → works_as\n- Residence\n  * Current city/country    → resides_in\n  * Previous city           → resides_in (with valid_until)\n- Personal\n  * Hobby (one per fact)    → hobby (NOT 'hobbies')\n  * Favourite thing         → favourite_{{thing}}\n  * Name                    → has_name\n  * Preferred name          → preferred_name\n  * Pet ownership           → has_pets\n- Family\n  * Sibling                 → has_sibling\n  * Partner                 → has_partner\n  * Parent                  → has_parent\n  * Child                   → has_child\n### Deduplication\nBefore emitting a fact, ask yourself: 'Have I already emitted a fact with the same subject and the same meaning?' If yes, do not emit the duplicate — instead strengthen the confidence by marking it Explicit.\nExample: If you already emitted studied_at='University of Auckland', do NOT also emit attended='University of Auckland'.\n### Output\nEmit ONLY via the 'remember' tool. Do not output free text.",
         guide
     ))
 }

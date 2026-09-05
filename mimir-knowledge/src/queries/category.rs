@@ -32,6 +32,17 @@ pub async fn list_categories(
     Ok(rows)
 }
 
+/// List every category in ID order for rendering or auditing the full tree.
+pub async fn list_all_categories(pool: &SqlitePool) -> Result<Vec<Category>, KnowledgeError> {
+    let rows = sqlx::query_as::<_, Category>(
+        "SELECT id, name, description, parent_id, memory_weight, memory_bucket_id, created_at \
+         FROM categories ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 /// Get a single category with its fact count.
 pub async fn get_category(
     pool: &SqlitePool,
@@ -72,6 +83,11 @@ pub async fn insert_category(
     new: &NewCategory,
     _now: DateTime<Utc>,
 ) -> Result<Category, KnowledgeError> {
+    if new.parent_id == Some(new.id) {
+        return Err(KnowledgeError::Validation(
+            "Category cannot be its own parent".to_string(),
+        ));
+    }
     if let Some(bucket_id) = new.memory_bucket_id {
         if MemoryBucket::try_from(bucket_id).is_err() {
             return Err(KnowledgeError::Validation(format!(

@@ -21,6 +21,8 @@ Mimir's knowledge graph organises facts with two complementary layers:
 
 Aliases are stored in the `category_aliases` table (globally unique `alias` → `category_id`). Insertion is idempotent and race-safe: `insert_category_alias` performs an atomic `INSERT OR IGNORE` then resolves the resulting mapping, so concurrent writers never leak a raw `UNIQUE`-constraint error — rebinds to a different category return a `Validation` error, and empty aliases / unknown category ids are rejected. The seed migration (`038`) runs inside a transaction with foreign-key enforcement on and uses `CREATE … IF NOT EXISTS` for defensive idempotency.
 
+Categories always form a root-first tree: creating a category with itself as its parent is rejected before insert, preventing hidden taxonomy nodes from being omitted from the extraction guide or subtree retrieval.
+
 ## Why categories, not a predicate hierarchy
 
 A predicate tree follows one axis (a predicate has one canonical name and one parent path). Categories are many-to-many: "Alice works_at Foo as an engineer" can be both `Current Role` and `Skills & Expertise`; "hobbies" spans `Music`, `Gaming`, `Outdoor Activities`. That granularity is what a reasoning agent needs — indoor vs outdoor for weather-aware suggestions, budget-relevant tags, shared-ground detection across two people. So grouping lives in categories; the predicate hierarchy is seeded (issue #403) with a few abstract parents (`employment`, `education`, `residence`, `containment`) purely so `kg_query --include-subtree` can ask "everything about employment" in one call. The parents are query-only — they can never be used as fact predicates.
@@ -33,7 +35,7 @@ A predicate tree follows one axis (a predicate has one canonical name and one pa
 
 ## Best practices
 
-- Tag facts with the **most specific** subcategory available at extraction time (the LLM is instructed to assign 1–3 category ids).
+- Tag facts with the **most specific** subcategory available at extraction time (the extraction prompt renders the complete category tree and instructs the LLM to assign 1–3 valid category ids).
 - Add new domain words via `insert_category_alias` rather than inventing new predicates — keep predicates as thin verbs.
 - Use the seeded predicate DAG parents (`employment`, `education`, `residence`, `containment`) for coarse verb generalisation in `kg_query --include-subtree`, and category subtrees for multi-axis grouping and memory ranking.
 - When adding a category outside the seeded taxonomy, set its memory bucket explicitly (`kb category add --memory-bucket-id 4` for a preference) — an unset bucket classifies as General.

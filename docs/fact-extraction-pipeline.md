@@ -100,7 +100,7 @@ The `remember_tool_schema` is a JSON object with a `facts` array. Each fact cont
 | `is_sensitive` | Boolean |
 | `correction_scope` | ISO-8601 datetime, `"always"`, or omitted (defaults to a temporal correction at `now` for `Correction` facts) |
 
-The extraction prompt defines role, schema, classification criteria, and a softened sensitivity instruction ("Flag health, financial, relationship, religious, political, or legal facts. Mimir will validate your assessment."). It contains **no conditional logic, no workflow instructions, and no "if X then Y"** — all of that lives in Rust.
+The extraction prompt defines role, schema, classification criteria, a complete DB-driven category tree, and a softened sensitivity instruction ("Flag health, financial, relationship, religious, political, or legal facts. Mimir will validate your assessment."). The category guide is rendered from the database rather than a separate depth-limited query, so the model sees every valid classification choice without needing a separate catalogue tool call. The prompt contains **no conditional logic, no workflow instructions, and no "if X then Y"** — all of that lives in Rust.
 
 ## Rust Validation
 

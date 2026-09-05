@@ -164,6 +164,8 @@ db_path = "{jobs_db}"
 
         // Pre-bind a listener to reserve a free port.
         let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(mimir_test_support::init_from_template(&kg_db))
+            .unwrap();
         let listener = rt
             .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
             .unwrap();

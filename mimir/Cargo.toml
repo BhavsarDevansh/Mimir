@@ -58,6 +58,7 @@ tabled = "0.21"
 secrets-keyring = ["mimir-server/secrets-keyring"]
 
 [dev-dependencies]
+mimir-test-support = { path = "../mimir-test-support" }
 tempfile = "3"
 mimir-core = { path = "../mimir-core", features = ["mock-llm"] }
 mimir-server = { path = "../mimir-server", features = ["mock-connector"] }

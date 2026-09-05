@@ -53,6 +53,8 @@ mock-connector = ["mimir-connectors/test-mock-connector"]
 secrets-keyring = ["mimir-connectors/secrets-keyring"]
 
 [dev-dependencies]
+mimir-test-support = { path = "../mimir-test-support" }
+
 criterion = { version = "0.8.2", features = ["async_tokio"] }
 mimir-client = { path = "../mimir-client" }
 mimir-core = { path = "../mimir-core", features = ["mock-llm"] }

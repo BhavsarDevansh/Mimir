@@ -139,7 +139,8 @@ The performance investigation (2026-08-26) added four benchmark suites that quan
 
 | Benchmark | What it measures | Baseline | Issue #524 |
 |-----------|------------------|----------|------------|
-| `kg_schema_init` | Fresh `KnowledgeGraph::init` incl. all 58 migrations (per-test setup cost) | 65.8 ms | 62.6 ms |
+| `kg_schema_init` | Fresh `KnowledgeGraph::init` incl. all 60 migrations (per-test setup cost for tests that intentionally exercise migrations) | 65.8 ms | 62.6 ms |
+| `kg_schema_init_from_template` | Copy the shared pre-migrated SQLite template plus `KnowledgeGraph::init` (per-test setup cost for standard helpers) | — | 4.06 ms |
 | `kg_fact_insert_small_graph` | 10 fact inserts into a 6-entity graph (~0.92 ms/insert) | 9.15 ms | 7.48 ms |
 | `kg_fact_insert_same_subject_growth` | 1 insert with 30 pre-existing facts on the subject (overlap-scan cost) | 2.43 ms | 2.01 ms |
 | `kg_entity_create_with_aliases` | 5 entity creates with 3 aliases each | 2.41 ms | 2.22 ms |
@@ -155,6 +156,8 @@ Issue #526 follow-up on v0.153.6: `kg_fact_insert_small_graph` measured 7.48 ms 
 Issue #527 follow-up on v0.153.8: migration 059 adds the two-column `facts(subject_id, relationship_type_id)` index. A short 10-sample comparison measured `kg_fact_insert_same_subject_growth` at 2.10 ms before and 1.96 ms after, `kg_traverse_star_300_node_cap_200` at 4.00 ms before and 3.82 ms after, and `kg_optimization_dedup_pass_100` unchanged at 36.5 ms; the insert and traversal deltas overlap zero at that sample size.
 
 Issue #528 follow-up on v0.153.9: batching deterministic-dedup merges and carrying pair confidences in the candidate query measured `kg_optimization_dedup_pass_100` in a 13.3–23.1 ms range with a 16.9 ms median over 10 samples, versus 36.5 ms on v0.153.8.
+
+Issue #535 follow-up on v0.160.1: the shared pre-migrated knowledge-graph template reduced the measured standard test setup from 72.68 ms fresh init (60 migrations on the same host) to 4.06 ms template copy + init.
 
 ### `mimir-core` — `db_init` and `mock_llm`
 

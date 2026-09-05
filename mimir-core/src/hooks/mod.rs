@@ -283,6 +283,9 @@ struct EngineInner {
     /// `std::sync::Mutex` because it is never held across an `await`.
     last_user_activity: StdMutex<Option<Instant>>,
     notify: Notify,
+    /// Test-only observable gate-check sequence for deterministic tests.
+    #[cfg(test)]
+    gate_checks: tokio::sync::watch::Sender<u64>,
     shutdown_tx: watch::Sender<bool>,
 }
 
@@ -325,10 +328,18 @@ impl HookEngine {
                 dispatch_exited: Notify::new(),
                 last_user_activity: StdMutex::new(None),
                 notify: Notify::new(),
+                #[cfg(test)]
+                gate_checks: tokio::sync::watch::channel(0).0,
                 shutdown_tx,
             }),
         });
         (engine, shutdown_rx)
+    }
+
+    /// Subscribe to the test-only dispatch-loop gate-check sequence.
+    #[cfg(test)]
+    pub fn gate_check_rx(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.inner.gate_checks.subscribe()
     }
 
     /// Register a hook and its durable [`JobQueue`] job.
@@ -534,6 +545,10 @@ impl HookEngine {
                 continue;
             }
             let deadline = self.inner.next_deadline().await;
+            #[cfg(test)]
+            {
+                crate::test_sync::increment_watch(&self.inner.gate_checks);
+            }
             tokio::select! {
                 biased;
                 _ = shutdown_rx.changed() => {

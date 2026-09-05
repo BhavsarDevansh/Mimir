@@ -4,9 +4,14 @@ use super::*;
 use crate::config::LlmConfig;
 use crate::llm::client::RetryConfig;
 use crate::llm::types::{LlmError, LlmRequestOverrides, Message, StreamItem};
+use crate::test_sync::wait_for_watch_minimum;
 use futures::StreamExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::time::Duration;
+
+async fn wait_for_job_started(pool: &LlmWorkerPool) {
+    let mut job_starts = pool.inner.job_starts.subscribe();
+    wait_for_watch_minimum(&mut job_starts, 1).await;
+}
 
 /// Read a complete HTTP request (headers + `Content-Length` body) from a mock
 /// server socket so JSON parsing never sees a partially delivered body (PR #477 review).
@@ -110,9 +115,6 @@ async fn test_pool_user_priority_over_system() {
 
     // Enqueue system first — it should sit in the system queue.
     let system_job = pool.enqueue_system_chat(vec![Message::system("system-first")], None);
-    // Give the worker a moment to pick up the system job if it were to.
-    tokio::time::sleep(Duration::from_millis(50)).await;
-
     // Enqueue user second — it should jump ahead.
     let user_job = pool.enqueue_chat(vec![Message::user("user-second")], None);
 
@@ -282,14 +284,12 @@ async fn test_pool_spawns_exactly_configured_workers() {
 async fn test_in_flight_counter_tracks_active_jobs() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let (response_gate_tx, response_gate_rx) = tokio::sync::oneshot::channel();
 
     tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
         let req = read_complete_request(&mut stream).await;
         assert!(req.contains("/chat/completions"));
-
-        // Sleep while "processing" so the counter stays elevated.
-        tokio::time::sleep(Duration::from_millis(200)).await;
 
         let body = r#"{"id":"1","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
         let response = format!(
@@ -297,6 +297,7 @@ async fn test_in_flight_counter_tracks_active_jobs() {
             body.len(),
             body
         );
+        response_gate_rx.await.unwrap();
         let _ = stream.write_all(response.as_bytes()).await;
     });
 
@@ -320,17 +321,11 @@ async fn test_in_flight_counter_tracks_active_jobs() {
             .await
     });
 
-    // Poll until in_flight becomes 1 (job picked up by worker).
-    let mut found_in_flight = false;
-    for _ in 0..100 {
-        let count = pool.in_flight_count();
-        if count == 1 {
-            found_in_flight = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    assert!(found_in_flight, "expected in_flight_count to reach 1");
+    wait_for_job_started(&pool).await;
+    assert_eq!(pool.in_flight_count(), 1);
+    response_gate_tx
+        .send(())
+        .expect("response gate receiver must stay alive until the assertion completes");
 
     // Wait for the job to complete.
     let _ = job.await.unwrap();

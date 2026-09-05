@@ -12,6 +12,8 @@ use std::time::Duration;
 
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
+#[cfg(test)]
+use tokio::sync::watch;
 use tracing::{debug, info, warn};
 
 use crate::job_queue::{JobError, JobQueue, JobRunSummary};
@@ -70,9 +72,9 @@ pub struct BackgroundScheduler {
     last_submit_time: AtomicU64,
     job_notify: Notify,
     user_notify: Notify,
-    /// Test-only signal: the dispatch loop has completed one gating check.
+    /// Test-only observable sequence of dispatch-loop gating checks.
     #[cfg(test)]
-    loop_checked: Notify,
+    loop_checks: watch::Sender<u64>,
     debounce: Duration,
     cooldown: Duration,
     shutdown_tx: tokio::sync::watch::Sender<bool>,
@@ -100,12 +102,18 @@ impl BackgroundScheduler {
             job_notify: Notify::new(),
             user_notify: Notify::new(),
             #[cfg(test)]
-            loop_checked: Notify::new(),
+            loop_checks: watch::channel(0).0,
             debounce,
             cooldown,
             shutdown_tx,
         });
         (scheduler, shutdown_rx)
+    }
+
+    /// Subscribe to the test-only dispatch-loop gating-check sequence.
+    #[cfg(test)]
+    fn loop_check_rx(&self) -> watch::Receiver<u64> {
+        self.loop_checks.subscribe()
     }
 
     /// Submit a job to the scheduler.
@@ -212,7 +220,9 @@ impl BackgroundScheduler {
             };
 
             #[cfg(test)]
-            self.loop_checked.notify_waiters();
+            {
+                crate::test_sync::increment_watch(&self.loop_checks);
+            }
 
             if has_pending && debounce_elapsed && cooldown_elapsed && llm_idle {
                 if let Some(job) = next_job {
@@ -329,6 +339,7 @@ mod tests {
     use super::*;
     use crate::job_queue::{Job, JobContext, JobPriority, JobRunStatus};
     use crate::llm::MockLlmClient;
+    use crate::test_sync::wait_for_watch_minimum as wait_for_loop_check;
     use std::time::Duration;
     use tokio::sync::Notify;
     use tokio::time::timeout;
@@ -457,15 +468,13 @@ mod tests {
 
         // Submit and start scheduler.
         sched.submit(DaemonJob::KnowledgeOptimization).await;
-        let first_check = sched.loop_checked.notified();
+        let mut first_check = sched.loop_check_rx();
         let sched_clone = Arc::clone(&sched);
         let handle = tokio::spawn(async move {
             sched_clone.start(shutdown_rx).await;
         });
 
-        timeout(Duration::from_secs(5), first_check)
-            .await
-            .expect("scheduler must check the queued job before shutdown");
+        wait_for_loop_check(&mut first_check, 1).await;
         wait_until_elapsed(
             sched.last_user_activity.load(Ordering::Relaxed),
             Duration::from_millis(185),
@@ -477,20 +486,14 @@ mod tests {
         assert!(pending.contains(&DaemonJob::KnowledgeOptimization));
         drop(pending);
 
-        let second_check = sched.loop_checked.notified();
+        let mut second_check = sched.loop_check_rx();
 
         // Simulate user activity.
         sched.notify_user_activity();
-        timeout(Duration::from_secs(5), second_check)
-            .await
-            .expect("scheduler must re-check after user activity");
-
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        wait_for_loop_check(&mut second_check, 2).await;
         sched.submit(DaemonJob::KnowledgeOptimization).await;
-        let reset_check = sched.loop_checked.notified();
-        timeout(Duration::from_secs(5), reset_check)
-            .await
-            .expect("scheduler must re-check after the original cooldown expires");
+        let mut reset_check = sched.loop_check_rx();
+        wait_for_loop_check(&mut reset_check, 3).await;
 
         // Still pending because cooldown reset.
         let pending = sched.pending.lock().await;
@@ -508,15 +511,13 @@ mod tests {
             BackgroundScheduler::new(jq, llm, Duration::ZERO, Duration::ZERO);
 
         sched.submit(DaemonJob::KnowledgeOptimization).await;
-        let first_check = sched.loop_checked.notified();
+        let mut first_check = sched.loop_check_rx();
         let sched_clone = Arc::clone(&sched);
         let handle = tokio::spawn(async move {
             sched_clone.start(shutdown_rx).await;
         });
 
-        timeout(Duration::from_secs(5), first_check)
-            .await
-            .expect("scheduler must check the queued job");
+        wait_for_loop_check(&mut first_check, 1).await;
 
         // LLM is "busy" so job should still be pending.
         let pending = sched.pending.lock().await;

@@ -39,6 +39,8 @@ impl LlmWorkerPool {
             shutdown_tx,
             handles: Mutex::new(Vec::new()),
             in_flight: AtomicUsize::new(0),
+            #[cfg(test)]
+            job_starts: watch::channel(0).0,
         });
 
         // Build every worker's HTTP client up front so a construction failure
@@ -72,6 +74,8 @@ impl LlmWorkerPool {
                         job = Self::next_job(&inner_spawn) => {
                             if let Some(job) = job {
                                 let _guard = InFlightGuard::new(&inner_spawn.in_flight);
+                                #[cfg(test)]
+                                crate::test_sync::increment_watch(&inner_spawn.job_starts);
                                 Self::process_job(&client, job).await;
                             }
                         }

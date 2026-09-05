@@ -4,6 +4,7 @@
 use super::*;
 use crate::job_queue::JobQueue;
 use crate::llm::MockLlmClient;
+use crate::test_sync::wait_for_watch_minimum as wait_for_gate_check;
 use std::collections::VecDeque;
 use std::sync::Mutex as StdMutex;
 
@@ -424,11 +425,9 @@ async fn debounce_window_delays_dispatch_and_resets_on_trigger() {
     let engine_clone = Arc::clone(&engine);
     tokio::time::pause();
     let handle = tokio::spawn(async move { engine_clone.start(shutdown_rx).await });
+    let mut gate_check = engine.gate_check_rx();
+    wait_for_gate_check(&mut gate_check, 1).await;
 
-    // Wait for the dispatch loop to observe the pending instance, then send
-    // a trigger inside the window; it replaces the payload and resets the
-    // window.
-    wait_for_async(|| async { engine.pending_depth_for("h").await == 1 }).await;
     engine.trigger(turn_trigger(1, "b")).await;
 
     advance_time(Duration::from_millis(100)).await;
@@ -467,10 +466,9 @@ async fn idle_gate_blocks_dispatch_while_llm_busy() {
     let engine_clone = Arc::clone(&engine);
     tokio::time::pause();
     let handle = tokio::spawn(async move { engine_clone.start(shutdown_rx).await });
+    let mut gate_check = engine.gate_check_rx();
+    wait_for_gate_check(&mut gate_check, 1).await;
 
-    // Give the dispatch loop a deterministic chance to observe the busy
-    // LLM pool and leave the hook queued.
-    advance_time(Duration::from_millis(300)).await;
     assert!(
         handler.calls().is_empty(),
         "idle-gated hook must not dispatch while the LLM pool is busy"
@@ -528,11 +526,15 @@ async fn cooldown_resets_on_user_activity() {
     let engine_clone = Arc::clone(&engine);
     tokio::time::pause();
     let handle = tokio::spawn(async move { engine_clone.start(shutdown_rx).await });
+    let mut first_check = engine.gate_check_rx();
+    wait_for_gate_check(&mut first_check, 1).await;
 
     // Advance into the initial cooldown window, then reset it with user
     // activity.
     advance_time(Duration::from_millis(100)).await;
     engine.notify_user_activity();
+    let mut reset_check = engine.gate_check_rx();
+    wait_for_gate_check(&mut reset_check, 2).await;
 
     advance_time(Duration::from_millis(150)).await;
     assert!(

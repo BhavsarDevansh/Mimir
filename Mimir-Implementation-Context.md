@@ -2,7 +2,7 @@
 
 > **Created:** 2025-05-20
 >
-> **Last Updated:** 2026-08-24
+> **Last Updated:** 2026-09-05
 >
 > **Vision Docs:** `VISION/` directory — 10 sections: `00-Overview`, `01-Core-Agent`, `02-Knowledge-Graph`, `03-Connectors`, `04-Reasoning-Engine`, `05-Proactive-Agent`, `06-Vision-Tracking`, `07-Journeys`, `08-Architecture`, `09-Roadmap`
 >
@@ -31,6 +31,7 @@ Mimir is a persistent, personal intelligence that learns from your life, connect
 5. **Proactivity** — Earns trust, then anticipates needs rather than only responding
 6. **Openness** — OpenAI-compatible API endpoint; pluggable connectors for services
 7. **Local-first** — All data stays on your device. No cloud intermediary
+8. **Rust-owned agency** — Rust owns triggers, deterministic inference, scoring, policy, action execution, audit, and feedback; the LLM is a bounded extractor/synthesizer, not the controller
 
 ---
 
@@ -48,7 +49,7 @@ mimir (single binary)
 │   ├── ContextManager (shared across all sessions)
 │   ├── ToolRegistry + SkillRegistry
 │   ├── KnowledgeGraph (memory ranking + condensation)
-│   └── Future: connectors, proactive agent, reasoning engine
+│   └── Future: connectors, memory-to-action engine, reasoning engine
 └── Client mode (mimir ask, chat, status, memory, personality, kb, connector, tool, skill, stop)
     ├── mimir-client (HTTP client → daemon)
     └── personality list runs locally — presets are files, not daemon state (issue #387)
@@ -104,8 +105,8 @@ If the user agrees, the daemon is started and the command is retried.
 │              Subsystems (all in Rust)                    │
 │                                                          │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  │
-│  │  Reasoning   │  │  Knowledge   │  │  Proactive   │  │
-│  │   Engine     │  │    Graph     │  │    Agent     │  │
+│  │  Reasoning   │  │  Knowledge   │  │  Memory-to-  │  │
+│  │   Engine     │  │    Graph     │  │  Action      │  │
 │  └──────────────┘  └──────────────┘  └──────────────┘  │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  │
 │  │  Connectors  │  │   Memory     │  │    Vision    │  │
@@ -232,6 +233,8 @@ The daemon exposes `GET /v1/models` and `POST /v1/chat/completions` (blocking + 
 
 ## Proactivity System (Phase 5)
 
+The current implementation framing is the Memory-to-Action Engine. Rust owns the event pipeline, inference, scoring, policy, action execution, audit, and feedback. The LLM remains a bounded extractor, synthesizer, and research helper rather than the controller. See `VISION/09-Roadmap/Memory-to-Action-Engine.md`, `docs/memory-to-action-engine.md`, and `docs/wiki/memory-to-action-engine.md`.
+
 - **Trust ladder:** Observation → Gentle Offers → Pattern Permissions → Autonomous
 - **Proactivity levels:** `never`, `important_only`, `always`
 - **Notification fatigue detection:** If 3+ dismissals in a row, pause proactivity.
@@ -277,9 +280,9 @@ See `VISION/09-Roadmap/Phase-1-Core-Agent.md` for full task list.
 | 1 | Core Agent | 4-6 weeks | Single binary, daemon/client, CLI, chat, LLM, KG-backed memory |
 | 2 | Knowledge Graph | 4-6 weeks | SQLite schema, entities, facts, temporal queries |
 | 3 | Connectors | 6-8 weeks | Email, Calendar, Photos, normalization pipeline |
-| 4 | Reasoning Engine | 6-8 weeks | Multi-thread investigation, meta-threads, streaming |
-| 5 | Proactive Agent | 4-6 weeks | Event monitoring, pattern recognition, trust ladder |
-| 6 | Vision Tracking | 6-8 weeks | Object detection, spatial memory, re-identification |
+| 4 | Reasoning Engine | 6-8 weeks | Bounded research and investigation service |
+| 5 | Memory-to-Action Engine | 4-6 weeks | Event bus, rule registry, scorer, policy, action executor |
+| 6 | Vision Tracking | 6-8 weeks | Object detection, spatial memory, readiness triggers |
 
 ---
 
@@ -292,6 +295,11 @@ See `VISION/09-Roadmap/Phase-1-Core-Agent.md` for full task list.
 - Data: `~/.local/share/mimir/`
 - Socket: `~/.local/share/mimir/mimir.sock`
 
+### Memory-to-Action
+- Roadmap: `VISION/09-Roadmap/Memory-to-Action-Engine.md`
+- Technical doc: `docs/memory-to-action-engine.md`
+- User doc: `docs/wiki/memory-to-action-engine.md`
+
 ### Key VISION Docs (if you need to reference)
 - `VISION/00-Overview/Vision-Statement.md` — Core premise and principles
 - `VISION/01-Core-Agent/Personality.md` — Personality system
@@ -302,6 +310,7 @@ See `VISION/09-Roadmap/Phase-1-Core-Agent.md` for full task list.
 - `VISION/02-Knowledge-Graph/Temporal-Facts.md` — Temporal storage model
 - `VISION/04-Reasoning-Engine/Technical-Design.md` — Investigation threads, meta-threads
 - `VISION/05-Proactive-Agent/User-Experience.md` — Trust ladder
+- `VISION/09-Roadmap/Memory-to-Action-Engine.md` — Rust-owned agency, event-to-action roadmap
 - `VISION/08-Architecture/Deployment-Model.md` — systemd, single binary, Unix socket
 - `VISION/08-Architecture/Permission-Model.md` — Permission levels
 
@@ -311,8 +320,9 @@ See `VISION/09-Roadmap/Phase-1-Core-Agent.md` for full task list.
 
 1. **Clone the repo:** `git clone https://github.com/BhavsarDevansh/Mimir.git`
 2. **Read the Phase 1 roadmap:** `VISION/09-Roadmap/Phase-1-Core-Agent.md`
-3. **Start with the mono-binary consolidation** (current work)
-4. **TDD throughout** — every feature starts with a failing test
+3. **Read the Memory-to-Action roadmap:** `VISION/09-Roadmap/Memory-to-Action-Engine.md`
+4. **Start with the current feature branch or milestone in the roadmap**
+5. **TDD throughout** — every feature starts with a failing test
 
 ---
 

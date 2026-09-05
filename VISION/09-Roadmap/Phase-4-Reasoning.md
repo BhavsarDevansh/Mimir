@@ -1,5 +1,7 @@
 # Phase 4: Reasoning Engine
 
+> **Current plan:** [`Memory-to-Action-Engine.md`](Memory-to-Action-Engine.md). Phase 4 is a bounded research and investigation service, not the agent controller or primary action path.
+
 ## Goal
 Build the multi-step investigation system for complex queries.
 

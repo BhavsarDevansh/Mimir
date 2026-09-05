@@ -1,5 +1,7 @@
 # Phase 5: Proactive Agent
 
+> **Current plan:** [`Memory-to-Action-Engine.md`](Memory-to-Action-Engine.md). This document remains useful for general proactive-agent capabilities, but the Memory-to-Action Engine is the current implementation framing and issue-ordering source.
+
 ## Goal
 Build the event monitoring, pattern recognition, and proactive suggestion system.
 

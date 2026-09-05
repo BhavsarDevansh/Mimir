@@ -4,6 +4,7 @@
 #![allow(unused_imports)]
 
 pub use std::sync::Arc;
+pub use std::time::Duration;
 pub use std::time::Instant;
 
 pub use axum::body::Body;
@@ -404,16 +405,12 @@ pub async fn has_prefers_blue(state: &Arc<AppState>) -> bool {
 /// false after a timeout.
 #[allow(dead_code)]
 pub async fn wait_for_prefers_blue(state: &Arc<AppState>) -> bool {
-    let deadline = Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        if has_prefers_blue(state).await {
-            return true;
-        }
-        if Instant::now() >= deadline {
-            return false;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
+    let state = Arc::clone(state);
+    poll_until(Duration::from_secs(5), move || {
+        let state = Arc::clone(&state);
+        async move { has_prefers_blue(&state).await }
+    })
+    .await
 }
 
 /// Wait until the `remember.chat` hook has drained its pending queue, so a
@@ -425,18 +422,34 @@ pub async fn wait_for_prefers_blue(state: &Arc<AppState>) -> bool {
 /// would otherwise make the helper flaky.
 #[allow(dead_code)]
 pub async fn wait_for_chat_hook_idle(state: &Arc<AppState>) {
-    let deadline = Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        let pending = state.hook_engine.pending_depth_for("remember.chat").await;
-        if pending == 0 {
-            // Allow an already dispatched instance to finish writing facts.
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-            return;
+    let state = Arc::clone(state);
+    let drained = poll_until(Duration::from_secs(5), move || {
+        let state = Arc::clone(&state);
+        async move {
+            state.hook_engine.pending_depth_for("remember.chat").await == 0
+                && !state.hook_engine.is_running("remember.chat").await
         }
-        assert!(
-            Instant::now() < deadline,
-            "remember.chat hook did not drain within 5s (pending={pending})"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    })
+    .await;
+    assert!(drained, "remember.chat hook did not drain within 5s");
+}
+
+/// Poll an observable test condition on a 10 ms cadence until it becomes
+/// true or the timeout expires. Returns whether the condition was observed.
+#[allow(dead_code)]
+pub async fn poll_until<F, Fut>(timeout: Duration, mut predicate: F) -> bool
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let deadline = Instant::now() + timeout;
+    loop {
+        if predicate().await {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
     }
 }

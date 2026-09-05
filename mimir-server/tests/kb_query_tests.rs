@@ -139,8 +139,14 @@ async fn test_kb_optimization_run_now_cancelled_returns_409() {
         .unwrap()
     });
 
-    // Give the run a moment to start, then cancel it.
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let running = poll_until(Duration::from_millis(5_000), || async {
+        state.job_queue.is_running("knowledge.optimization").await
+    })
+    .await;
+    assert!(
+        running,
+        "knowledge optimization job did not start within 5s"
+    );
     assert!(jq.cancel("knowledge.optimization"));
 
     let response = response_task.await.unwrap();

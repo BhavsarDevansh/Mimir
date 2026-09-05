@@ -531,6 +531,11 @@ impl HookEngine {
         self.inner.running.lock().await.len()
     }
 
+    /// Whether one hook currently has a running instance.
+    pub async fn is_running(&self, hook_id: &str) -> bool {
+        self.inner.running.lock().await.contains_key(hook_id)
+    }
+
     /// Start the dispatch loop.
     ///
     /// Runs until the shutdown watch channel fires.

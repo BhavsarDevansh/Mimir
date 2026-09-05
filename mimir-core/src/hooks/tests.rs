@@ -821,6 +821,32 @@ async fn force_run_executes_handler_with_empty_payload() {
 }
 
 #[tokio::test]
+async fn is_running_reports_only_the_named_hook() {
+    let (engine, _temp, _shutdown_rx) = test_engine().await;
+    let handler = TestHandler::blocking(vec![HookOutcome::Success]);
+    engine
+        .register(hook(
+            "first",
+            QueuePolicy::Multiple,
+            Gate::Ungated,
+            handler.clone(),
+        ))
+        .await
+        .unwrap();
+
+    let engine_clone = Arc::clone(&engine);
+    let handle = tokio::spawn(async move { engine_clone.force_run("first").await });
+    wait_for_async(|| async { engine.is_running("first").await }).await;
+
+    assert!(engine.is_running("first").await);
+    assert!(!engine.is_running("missing").await);
+
+    handler.release();
+    let summary = handle.await.unwrap().unwrap();
+    assert_eq!(summary.status, crate::job_queue::JobRunStatus::Succeeded);
+}
+
+#[tokio::test]
 async fn force_run_rejects_unknown_and_running_hooks() {
     let (engine, _temp, _shutdown_rx) = test_engine().await;
     let handler = TestHandler::blocking(vec![HookOutcome::Success]);

@@ -546,16 +546,11 @@ async fn test_connector_sync_triggers_and_returns_ok() {
     let created = create_test_connector(&app, "sync-me", serde_json::json!({})).await;
     // Activate the connector so a sync trigger has a runner to wake.
     state.connector_supervisor.start(created.id).await.unwrap();
-    // Wait for the runner to complete its auth handshake (poll, not a
-    // fixed sleep, so a loaded CI runner cannot fail the trigger).
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while !state.connector_supervisor.is_running(created.id).await {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "timed out waiting for connector runner to start"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
+    let running = poll_until(Duration::from_secs(5), || async {
+        state.connector_supervisor.is_running(created.id).await
+    })
+    .await;
+    assert!(running, "connector runner did not start within 5s");
 
     let resp = connector_sub_post(app, created.id, "sync", Some(serde_json::json!({}))).await;
     assert_eq!(resp.status(), StatusCode::OK);

@@ -11,6 +11,8 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
+#[cfg(test)]
+use tokio::sync::watch;
 use tracing::{debug, info, warn};
 
 use super::{Agent, AgentContext};
@@ -42,9 +44,9 @@ impl PendingKey {
 pub struct AgentRuntime {
     agents: Arc<Mutex<Vec<(String, BoxedAgent)>>>,
     pending: Arc<Mutex<HashSet<PendingKey>>>,
-    /// Test-only signal: a dispatched agent task has completed or panicked.
+    /// Test-only sequence of dispatched agent-task exits.
     #[cfg(test)]
-    task_exited: Arc<tokio::sync::Notify>,
+    task_exits: Arc<watch::Sender<u64>>,
 }
 
 impl Default for AgentRuntime {
@@ -54,15 +56,10 @@ impl Default for AgentRuntime {
 }
 
 impl AgentRuntime {
-    /// Wait for the next test-observed agent task exit.
+    /// Subscribe to the test-only dispatched agent-task exit sequence.
     #[cfg(test)]
-    pub async fn wait_task_exit(&self) {
-        tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            self.task_exited.notified(),
-        )
-        .await
-        .expect("agent runtime task must finish within five seconds");
+    pub fn task_exit_rx(&self) -> watch::Receiver<u64> {
+        self.task_exits.subscribe()
     }
 
     /// Create a new runtime.
@@ -71,7 +68,7 @@ impl AgentRuntime {
             agents: Arc::new(Mutex::new(Vec::new())),
             pending: Arc::new(Mutex::new(HashSet::new())),
             #[cfg(test)]
-            task_exited: Arc::new(tokio::sync::Notify::new()),
+            task_exits: Arc::new(watch::channel(0).0),
         }
     }
 
@@ -130,7 +127,7 @@ impl AgentRuntime {
 
         let pending = Arc::clone(&self.pending);
         #[cfg(test)]
-        let task_exited = Arc::clone(&self.task_exited);
+        let task_exits = Arc::clone(&self.task_exits);
         tokio::spawn(async move {
             let task = tokio::spawn(async move {
                 let agent = agent
@@ -146,7 +143,7 @@ impl AgentRuntime {
                 Err(_) => warn!("AgentRuntime: {} panicked", kind),
             }
             #[cfg(test)]
-            task_exited.notify_one();
+            crate::test_sync::increment_watch(&task_exits);
         });
 
         true
@@ -161,6 +158,7 @@ mod tests {
     use async_trait::async_trait;
 
     use super::*;
+    use crate::test_sync::wait_for_watch_minimum;
 
     #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     struct TestGoal(String);
@@ -216,7 +214,8 @@ mod tests {
             .submit::<TestAgent>(TestGoal("a".into()), Arc::new(EmptyCtx))
             .await;
         assert!(queued);
-        runtime.wait_task_exit().await;
+        let mut task_exits = runtime.task_exit_rx();
+        wait_for_watch_minimum(&mut task_exits, 1).await;
         assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
 
@@ -237,7 +236,8 @@ mod tests {
             .await;
         assert!(queued1);
         assert!(!queued2);
-        runtime.wait_task_exit().await;
+        let mut task_exits = runtime.task_exit_rx();
+        wait_for_watch_minimum(&mut task_exits, 1).await;
         assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
 
@@ -256,8 +256,8 @@ mod tests {
         runtime
             .submit::<TestAgent>(TestGoal("b".into()), Arc::new(EmptyCtx))
             .await;
-        runtime.wait_task_exit().await;
-        runtime.wait_task_exit().await;
+        let mut task_exits = runtime.task_exit_rx();
+        wait_for_watch_minimum(&mut task_exits, 2).await;
         assert_eq!(counter.load(Ordering::SeqCst), 2);
     }
 
@@ -269,7 +269,8 @@ mod tests {
             .submit::<PanicAgent>(TestGoal("a".into()), Arc::new(EmptyCtx))
             .await;
         assert!(queued1);
-        runtime.wait_task_exit().await;
+        let mut task_exits = runtime.task_exit_rx();
+        wait_for_watch_minimum(&mut task_exits, 1).await;
         let queued2 = runtime
             .submit::<PanicAgent>(TestGoal("a".into()), Arc::new(EmptyCtx))
             .await;

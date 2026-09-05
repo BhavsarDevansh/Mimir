@@ -12,6 +12,8 @@ use std::time::Duration;
 
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
+#[cfg(test)]
+use tokio::sync::watch;
 use tracing::{debug, info, warn};
 
 use crate::job_queue::{JobError, JobQueue, JobRunSummary};
@@ -72,7 +74,7 @@ pub struct BackgroundScheduler {
     user_notify: Notify,
     /// Test-only observable sequence of dispatch-loop gating checks.
     #[cfg(test)]
-    loop_checks: tokio::sync::watch::Sender<u64>,
+    loop_checks: watch::Sender<u64>,
     debounce: Duration,
     cooldown: Duration,
     shutdown_tx: tokio::sync::watch::Sender<bool>,
@@ -100,7 +102,7 @@ impl BackgroundScheduler {
             job_notify: Notify::new(),
             user_notify: Notify::new(),
             #[cfg(test)]
-            loop_checks: tokio::sync::watch::channel(0).0,
+            loop_checks: watch::channel(0).0,
             debounce,
             cooldown,
             shutdown_tx,
@@ -110,7 +112,7 @@ impl BackgroundScheduler {
 
     /// Subscribe to the test-only dispatch-loop gating-check sequence.
     #[cfg(test)]
-    fn loop_check_rx(&self) -> tokio::sync::watch::Receiver<u64> {
+    fn loop_check_rx(&self) -> watch::Receiver<u64> {
         self.loop_checks.subscribe()
     }
 
@@ -219,8 +221,7 @@ impl BackgroundScheduler {
 
             #[cfg(test)]
             {
-                let checks = *self.loop_checks.borrow();
-                let _ = self.loop_checks.send(checks + 1);
+                crate::test_sync::increment_watch(&self.loop_checks);
             }
 
             if has_pending && debounce_elapsed && cooldown_elapsed && llm_idle {
@@ -338,6 +339,7 @@ mod tests {
     use super::*;
     use crate::job_queue::{Job, JobContext, JobPriority, JobRunStatus};
     use crate::llm::MockLlmClient;
+    use crate::test_sync::wait_for_watch_minimum as wait_for_loop_check;
     use std::time::Duration;
     use tokio::sync::Notify;
     use tokio::time::timeout;
@@ -356,18 +358,6 @@ mod tests {
             );
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
-    }
-
-    async fn wait_for_loop_check(rx: &mut tokio::sync::watch::Receiver<u64>, minimum: u64) {
-        timeout(Duration::from_secs(5), async {
-            while *rx.borrow_and_update() < minimum {
-                rx.changed()
-                    .await
-                    .expect("scheduler task must stay alive while checking gates");
-            }
-        })
-        .await
-        .expect("scheduler must complete a gating check");
     }
 
     async fn test_job_queue() -> (Arc<JobQueue>, tempfile::TempDir, Arc<Notify>) {

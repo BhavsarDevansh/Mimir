@@ -41,7 +41,7 @@ A workspace-wide pass expanded inline unit-test coverage for pure helpers, wire 
 
 ## Event-driven test synchronisation
 
-Core-agent timing tests avoid fixed wall-clock sleeps for timing transitions (issue #533). Hook and scheduler timing-window tests use Tokio paused time and test-only gate-check sequences; agent-runtime tests await task-exit signals; worker-pool counter tests await a test-only job-start signal; context timestamp-ordering tests write explicit database timestamps; and the conversation hash test no longer sleeps for timestamp separation. Bounded 5–10 ms helpers remain only for broad observable-state polling, while the asserted timing transitions are event-driven.
+Core-agent timing tests avoid fixed wall-clock sleeps for timing transitions (issue #533). Hook and scheduler timing-window tests use Tokio paused time and test-only monotonic gate-check sequences; agent-runtime and worker-pool counter tests await monotonic task-exit and job-start sequences; context timestamp-ordering tests write explicit database timestamps; and the conversation hash test no longer sleeps for timestamp separation. Bounded 5–10 ms helpers remain only for broad observable-state polling, while the asserted timing transitions are event-driven.
 
 ## `mimir-server`
 

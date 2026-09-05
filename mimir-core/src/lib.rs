@@ -16,6 +16,8 @@ pub mod scheduler;
 pub mod skills;
 mod sqlite;
 pub mod systemd;
+#[cfg(test)]
+pub(crate) mod test_sync;
 pub mod tools;
 
 pub fn version() -> &'static str {

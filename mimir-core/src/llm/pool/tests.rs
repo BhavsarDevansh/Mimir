@@ -4,14 +4,13 @@ use super::*;
 use crate::config::LlmConfig;
 use crate::llm::client::RetryConfig;
 use crate::llm::types::{LlmError, LlmRequestOverrides, Message, StreamItem};
+use crate::test_sync::wait_for_watch_minimum;
 use futures::StreamExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::time::{Duration, timeout};
 
 async fn wait_for_job_started(pool: &LlmWorkerPool) {
-    timeout(Duration::from_secs(5), pool.inner.job_started.notified())
-        .await
-        .expect("worker must start a job");
+    let mut job_starts = pool.inner.job_starts.subscribe();
+    wait_for_watch_minimum(&mut job_starts, 1).await;
 }
 
 /// Read a complete HTTP request (headers + `Content-Length` body) from a mock

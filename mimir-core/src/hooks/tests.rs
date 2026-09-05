@@ -4,6 +4,7 @@
 use super::*;
 use crate::job_queue::JobQueue;
 use crate::llm::MockLlmClient;
+use crate::test_sync::wait_for_watch_minimum as wait_for_gate_check;
 use std::collections::VecDeque;
 use std::sync::Mutex as StdMutex;
 
@@ -121,18 +122,6 @@ where
 
 async fn advance_time(duration: Duration) {
     tokio::time::advance(duration).await;
-}
-
-async fn wait_for_gate_check(rx: &mut watch::Receiver<u64>, minimum: u64) {
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while *rx.borrow_and_update() < minimum {
-            rx.changed()
-                .await
-                .expect("hooks task must stay alive while checking gates");
-        }
-    })
-    .await
-    .expect("hooks engine must complete a gating check");
 }
 
 #[tokio::test]

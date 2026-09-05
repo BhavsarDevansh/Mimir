@@ -547,8 +547,7 @@ impl HookEngine {
             let deadline = self.inner.next_deadline().await;
             #[cfg(test)]
             {
-                let gate_checks = *self.inner.gate_checks.borrow();
-                let _ = self.inner.gate_checks.send(gate_checks + 1);
+                crate::test_sync::increment_watch(&self.inner.gate_checks);
             }
             tokio::select! {
                 biased;

@@ -9,6 +9,8 @@
 //! - same-subject insert growth — the overlap scan re-reads every existing
 //!   fact for the subject/predicate pair;
 //! - entity creation with aliases — per-alias `INSERT OR IGNORE` loop;
+//! - Obsidian import with shared objects across files — repeated object
+//!   resolution against a fresh graph;
 //! - the nightly dedup pass — the O(n^2) self-join over same-subject facts;
 //! - BFS traversal of a star graph — the `node_cap` traversal path.
 
@@ -17,6 +19,7 @@ use mimir_knowledge::KnowledgeGraph;
 use mimir_knowledge::models::entity::EntityType;
 use mimir_knowledge::models::fact::{FactStatus, NewFact};
 use mimir_knowledge::models::source::SourceType;
+use mimir_knowledge::obsidian::ObsidianFile;
 use mimir_knowledge::optimization::{OptimizationConfig, OptimizationRunner, PassName};
 use mimir_knowledge::queries;
 
@@ -196,6 +199,47 @@ fn bench_entity_create_with_aliases(c: &mut Criterion) {
     });
 }
 
+fn bench_obsidian_import_shared_object_resolution(c: &mut Criterion) {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let file_count = 3;
+    let object_count = 50;
+    let files = (0..file_count)
+        .map(|file_index| {
+            let facts = (0..object_count)
+                .map(|object_index| {
+                    format!("- has_partner → [[Object{object_index}]] (since 2022-01-01)")
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            ObsidianFile {
+                relative_path: format!("Person{file_index}.md"),
+                content: format!(
+                    "---\ntype: Person\n---\n\n# Person{file_index}\n\n## Relationships\n{facts}\n"
+                ),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    c.bench_function("kg_obsidian_import_shared_objects_3x50", |b| {
+        b.iter_batched(
+            || {
+                let dir = tempfile::tempdir().unwrap();
+                let kg = rt
+                    .block_on(KnowledgeGraph::init(&dir.path().join("kg.db")))
+                    .unwrap();
+                (kg, dir)
+            },
+            |(kg, _dir)| {
+                rt.block_on(async {
+                    let outcome = kg.import_obsidian(&files, false).await.unwrap();
+                    std::hint::black_box(outcome.counts.facts_new);
+                });
+            },
+            BatchSize::SmallInput,
+        )
+    });
+}
+
 fn bench_dedup_pass(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
     c.bench_function("kg_optimization_dedup_pass_100", |b| {
@@ -317,6 +361,7 @@ criterion_group!(
     bench_fact_insert_small_graph,
     bench_fact_insert_same_subject_growth,
     bench_entity_create_with_aliases,
+    bench_obsidian_import_shared_object_resolution,
     bench_dedup_pass,
     bench_traverse_star_graph
 );

@@ -618,6 +618,105 @@ type: Person
 }
 
 #[tokio::test]
+async fn import_dry_run_resolves_object_aliases_like_apply() {
+    let (kg, _dir) = fresh_kg().await;
+    kg.create_entity("Alice", EntityType::Person, &["Ally"])
+        .await
+        .unwrap();
+
+    let file = ObsidianFile {
+        relative_path: "Devansh.md".to_string(),
+        content: r#"---
+type: Person
+---
+
+# Devansh
+
+## Relationships
+- has_partner → [[Ally]] (since 2022-01-01)
+"#
+        .to_string(),
+    };
+
+    let dry = kg
+        .import_obsidian(std::slice::from_ref(&file), true)
+        .await
+        .unwrap();
+    assert_eq!(dry.counts.entities_new, 1, "{:?}", dry.counts);
+
+    let applied = kg
+        .import_obsidian(std::slice::from_ref(&file), false)
+        .await
+        .unwrap();
+    assert_eq!(applied.counts.entities_new, 1, "{:?}", applied.counts);
+    assert_eq!(applied.counts.facts_new, 1);
+}
+
+#[tokio::test]
+async fn import_object_cache_does_not_survive_an_entity_rename() {
+    let (kg, _dir) = fresh_kg().await;
+    kg.create_entity("Alice", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    let devansh = ObsidianFile {
+        relative_path: "Devansh.md".to_string(),
+        content: r#"---
+type: Person
+---
+
+# Devansh
+
+## Relationships
+- has_partner → [[Alice]]
+"#
+        .to_string(),
+    };
+    let alice = kg
+        .create_entity("Alice", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    let rename = ObsidianFile {
+        relative_path: "Alice.md".to_string(),
+        content: format!("---\nentity_id: {}\ntype: Person\n---\n\n# Zed\n", alice.id),
+    };
+    let bob = ObsidianFile {
+        relative_path: "Bob.md".to_string(),
+        content: r#"---
+type: Person
+---
+
+# Bob
+
+## Relationships
+- has_sibling → [[Alice]]
+"#
+        .to_string(),
+    };
+
+    let dry_run = kg
+        .import_obsidian(&[devansh.clone(), rename.clone(), bob.clone()], true)
+        .await
+        .unwrap();
+    assert_eq!(dry_run.counts.entities_updated, 1, "{:?}", dry_run.counts);
+    assert_eq!(
+        dry_run.counts.entities_new, 3,
+        "dry-run agrees with apply: {:?}",
+        dry_run.counts
+    );
+    assert_eq!(dry_run.counts.facts_new, 2, "{:?}", dry_run.counts);
+
+    let outcome = kg
+        .import_obsidian(&[devansh, rename, bob], false)
+        .await
+        .unwrap();
+    assert_eq!(outcome.counts.entities_updated, 1, "{:?}", outcome.counts);
+    assert_eq!(outcome.counts.entities_new, 3, "{:?}", outcome.counts);
+    assert_eq!(outcome.counts.facts_new, 2, "{:?}", outcome.counts);
+}
+
+#[tokio::test]
 async fn import_dry_run_counts_each_new_entity_once() {
     let (kg, _dir) = fresh_kg().await;
     // The same new subject spans two files and the same new object is

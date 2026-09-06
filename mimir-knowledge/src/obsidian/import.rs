@@ -10,7 +10,7 @@
 //! Dry-run mode plans everything (entity resolution, existence checks) but
 //! never writes: the reported counts are exactly what an apply would change.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::models::audit_log::ChangedBy;
@@ -40,11 +40,66 @@ pub struct ObsidianFile {
     pub content: String,
 }
 
+#[derive(Default)]
+struct ObjectResolutionCache {
+    resolved: HashMap<String, ResolvedEntity>,
+    renamed: HashSet<String>,
+    allowed_object_types: HashMap<(i16, i16), EntityType>,
+}
+
+struct ResolvedEntity {
+    id: i32,
+    name: String,
+}
+
+impl ObjectResolutionCache {
+    fn get_resolved(&self, name: &str) -> Option<(String, i32)> {
+        self.resolved
+            .get(&name.to_ascii_lowercase())
+            .map(|entity| (entity.name.clone(), entity.id))
+    }
+
+    /// Only cache canonical names. Alias matches can depend on the
+    /// relationship-derived object type, so they must not be reused for a
+    /// different object-type constraint with the same alias text.
+    fn remember(&mut self, name: &str, entity: &Entity) {
+        if entity.name.eq_ignore_ascii_case(name) {
+            self.resolved.insert(
+                name.to_ascii_lowercase(),
+                ResolvedEntity {
+                    id: entity.id,
+                    name: entity.name.clone(),
+                },
+            );
+        }
+    }
+
+    fn remove_entity(&mut self, entity_id: i32) {
+        self.resolved.retain(|_, entity| entity.id != entity_id);
+    }
+
+    fn mark_renamed(&mut self, old_name: &str) {
+        self.renamed.insert(old_name.to_ascii_lowercase());
+    }
+
+    fn is_renamed(&self, name: &str) -> bool {
+        self.renamed.contains(&name.to_ascii_lowercase())
+    }
+}
+
 async fn allowed_object_type(
     kg: &KnowledgeGraph,
+    cache: &mut ObjectResolutionCache,
     relationship_type_id: i16,
     subject_type: EntityType,
 ) -> Result<EntityType, KnowledgeError> {
+    if let Some(entity_type) = cache
+        .allowed_object_types
+        .get(&(relationship_type_id, subject_type as i16))
+    {
+        return Ok(*entity_type);
+    }
+
     let allowed_type: Option<i16> = sqlx::query_scalar(
         "SELECT allowed_object_type_id \
          FROM relationship_constraints \
@@ -55,9 +110,13 @@ async fn allowed_object_type(
     .bind(subject_type as i16)
     .fetch_optional(kg.pool())
     .await?;
-    Ok(allowed_type
+    let entity_type = allowed_type
         .and_then(|type_id| EntityType::try_from(type_id).ok())
-        .unwrap_or(EntityType::Concept))
+        .unwrap_or(EntityType::Concept);
+    cache
+        .allowed_object_types
+        .insert((relationship_type_id, subject_type as i16), entity_type);
+    Ok(entity_type)
 }
 
 /// What an import would change (or did change), in dry-run and apply modes.
@@ -136,6 +195,7 @@ pub(crate) async fn import_all(
     // Entity names planned to be created, so a name referenced from several
     // files/lines is counted once — the exact set an apply would create.
     let mut planned_new_entities: HashSet<String> = HashSet::new();
+    let mut object_cache = ObjectResolutionCache::default();
 
     for file in files {
         let document = match parse_document(file) {
@@ -155,6 +215,7 @@ pub(crate) async fn import_all(
             dry_run,
             &mut outcome,
             &mut planned_new_entities,
+            &mut object_cache,
         )
         .await
         {
@@ -299,6 +360,7 @@ async fn import_document(
     dry_run: bool,
     outcome: &mut ObsidianImportOutcome,
     planned_new_entities: &mut HashSet<String>,
+    object_cache: &mut ObjectResolutionCache,
 ) -> Result<(), KnowledgeError> {
     // ------------------------------------------------------------------
     // Subject entity: an anchored entity_id wins; otherwise resolve the name
@@ -310,6 +372,10 @@ async fn import_document(
                 let (entity, changed) =
                     apply_entity_updates(kg, &existing, &document, dry_run).await?;
                 if changed {
+                    object_cache.remove_entity(entity.id);
+                    if document_renames_entity(&existing, &document) {
+                        object_cache.mark_renamed(&existing.name);
+                    }
                     outcome.counts.entities_updated += 1;
                 }
                 Some(entity)
@@ -353,6 +419,10 @@ async fn import_document(
         } else if let Some(entity) = resolved {
             let (entity, changed) = apply_entity_updates(kg, &entity, &document, dry_run).await?;
             if changed {
+                object_cache.remove_entity(entity.id);
+                if document_renames_entity(&entity, &document) {
+                    object_cache.mark_renamed(&entity.name);
+                }
                 outcome.counts.entities_updated += 1;
             }
             Some(entity)
@@ -397,19 +467,18 @@ async fn import_document(
                 continue;
             }
         };
-        let (object_name, object_id) = plan_object(
-            kg,
-            &line.object,
+        let mut context = ObjectPlanningContext {
             relationship_type_id,
-            subject.as_ref().map_or(
+            subject_type: subject.as_ref().map_or(
                 document.entity_type.unwrap_or(EntityType::Concept),
                 |entity| EntityType::try_from(entity.entity_type_id).unwrap_or(EntityType::Concept),
             ),
             dry_run,
-            &mut outcome.counts,
+            counts: &mut outcome.counts,
             planned_new_entities,
-        )
-        .await?;
+            object_cache,
+        };
+        let (object_name, object_id) = plan_object(kg, &line.object, &mut context).await?;
         let existing = if let Some(subject) = &subject {
             let predicate_id = kg.relationship_type_id(&line.predicate).await;
             let literal = object_literal_of(line);
@@ -572,6 +641,16 @@ async fn import_document(
     Ok(())
 }
 
+/// Per-fact planning inputs and mutable accounting state for object lookup.
+struct ObjectPlanningContext<'a> {
+    relationship_type_id: i16,
+    subject_type: EntityType,
+    dry_run: bool,
+    counts: &'a mut ObsidianImportCounts,
+    planned_new_entities: &'a mut HashSet<String>,
+    object_cache: &'a mut ObjectResolutionCache,
+}
+
 /// Resolve a fact line's object entity and update the entity-creation count.
 ///
 /// Returns the object's canonical name and id (`None` id when the object is a
@@ -579,11 +658,7 @@ async fn import_document(
 async fn plan_object(
     kg: &KnowledgeGraph,
     object: &ObsidianObject,
-    relationship_type_id: i16,
-    subject_type: EntityType,
-    dry_run: bool,
-    counts: &mut ObsidianImportCounts,
-    planned_new_entities: &mut HashSet<String>,
+    context: &mut ObjectPlanningContext<'_>,
 ) -> Result<(String, Option<i32>), KnowledgeError> {
     match object {
         ObsidianObject::Literal(value) => Ok((value.clone(), None)),
@@ -593,23 +668,50 @@ async fn plan_object(
             // miss a same-name entity of another type (e.g. a `Person`
             // `[[Alice]]`). `create_entity`'s upsert reuses that entity, so
             // the exact same-name fallback keeps dry-run and apply identical.
-            let results =
-                queries::entity::get_by_name_typed(kg.pool(), name, EntityType::Concept).await?;
-            if let Some(entity) = pick_resolution(&results) {
-                return Ok((entity.name.clone(), Some(entity.id)));
+            if let Some((canonical_name, id)) = context.object_cache.get_resolved(name) {
+                return Ok((canonical_name, Some(id)));
             }
-            if let Some(entity) = queries::entity::get_exact_name(kg.pool(), name).await? {
-                return Ok((entity.name.clone(), Some(entity.id)));
+            if !context.object_cache.is_renamed(name) {
+                let results =
+                    queries::entity::get_by_name_typed(kg.pool(), name, EntityType::Concept)
+                        .await?;
+                if let Some(entity) = pick_resolution(&results) {
+                    context.object_cache.remember(name, entity);
+                    return Ok((entity.name.clone(), Some(entity.id)));
+                }
+                if let Some(entity) = queries::entity::get_exact_name(kg.pool(), name).await? {
+                    context.object_cache.remember(name, &entity);
+                    return Ok((entity.name.clone(), Some(entity.id)));
+                }
             }
-            if planned_new_entities.insert(name.to_lowercase()) {
-                counts.entities_new += 1;
+            let object_type = allowed_object_type(
+                kg,
+                context.object_cache,
+                context.relationship_type_id,
+                context.subject_type,
+            )
+            .await?;
+
+            if context.dry_run && object_type != EntityType::Concept {
+                let results =
+                    queries::entity::get_by_name_typed(kg.pool(), name, object_type).await?;
+                if let Some(entity) = pick_resolution(&results) {
+                    context.object_cache.remember(name, entity);
+                    return Ok((entity.name.clone(), Some(entity.id)));
+                }
             }
-            if dry_run {
+
+            if context.dry_run {
+                if context.planned_new_entities.insert(name.to_lowercase()) {
+                    context.counts.entities_new += 1;
+                }
                 Ok((name.clone(), None))
             } else {
-                let object_type =
-                    allowed_object_type(kg, relationship_type_id, subject_type).await?;
-                let (entity, _) = resolve_or_create(kg, name, object_type).await?;
+                let (entity, created) = resolve_or_create(kg, name, object_type).await?;
+                if context.planned_new_entities.insert(name.to_lowercase()) && created {
+                    context.counts.entities_new += 1;
+                }
+                context.object_cache.remember(name, &entity);
                 Ok((entity.name.clone(), Some(entity.id)))
             }
         }
@@ -656,12 +758,7 @@ async fn apply_entity_updates(
     let type_changed = document
         .entity_type
         .is_some_and(|declared| EntityType::try_from(entity.entity_type_id).ok() != Some(declared));
-    // Only an explicit `# heading` renames: a heading-less note (file-stem
-    // fallback) never renames the stored entity.
-    let name_changed = document
-        .heading
-        .as_ref()
-        .is_some_and(|heading| entity.name != *heading);
+    let name_changed = document_renames_entity(entity, document);
     let known_aliases: Vec<String> = entity
         .aliases
         .as_deref()
@@ -698,6 +795,15 @@ async fn apply_entity_updates(
         entity.clone(),
         name_changed || type_changed || !aliases_missing.is_empty(),
     ))
+}
+
+/// Only an explicit `# heading` renames: a heading-less note (file-stem
+/// fallback) never renames the stored entity.
+fn document_renames_entity(entity: &Entity, document: &ParsedDocument) -> bool {
+    document
+        .heading
+        .as_ref()
+        .is_some_and(|heading| entity.name != *heading)
 }
 
 fn normalized_fact(

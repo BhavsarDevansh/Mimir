@@ -2,60 +2,48 @@
 
 ## What Is It?
 
-When Mimir needs facts or historical context to answer your question, it doesn't just guess — it launches a **dedicated research agent** to investigate your knowledge graph and conversation history.
+When Mimir needs facts or historical context to answer your question, it launches a focused research stage through the `retrieve_context` tool. This stage searches your knowledge graph and past conversations, then gives the answer model structured evidence.
 
-This means Mimir can:
-- Look up facts about people you mention
-- Traverse relationships ("Mary's husband works at...")
-- Search past conversations for relevant snippets
-- Do all of the above in parallel across multiple retrieval tasks
+It can look up facts about people and places you mention, traverse relationships, and find relevant past snippets.
 
 ## How It Works
 
-When you ask something like:
+For a request such as:
 
 > "I have Mary, Bob, and Tom coming over for dinner. What should I make?"
 
-Mimir's main agent may launch **four** retrieval agents:
-1. Research Mary's food preferences and allergies
-2. Research Bob's food preferences and allergies
-3. Research Tom's food preferences and allergies
-4. Research your own preferences for hosting dinner
+the main model may launch separate retrieval tasks for Mary, Bob, and Tom. Each task is researched in one deterministic pass:
 
-Each retrieval agent runs in its own ephemeral session, querying the knowledge graph and searching conversation history for up to 25 rounds before returning a structured summary.
+1. Mimir searches entities once for each alphanumeric token in the task.
+2. It searches conversation history once for the task.
+3. For each distinct entity found, it queries facts once and traverses related relationships once.
+4. Duplicate entities, facts, relations, and snippets are merged before the main model sees the context.
 
-Retrieval agents run on the same model you chose for the chat request, so per-request model overrides and the configured temperature are honoured while Mimir researches (issue #441).
+The inner retrieval process does not ask an LLM to choose tools or decide when to stop. This removes repeated identical calls, runaway loops, and duplicate database work while keeping the main model responsible only for choosing whether to request context and synthesising the answer.
 
 ## What You See
 
-In the streaming chat interface, you'll see:
+In streaming chat, research steps are visible as normal tool-call events:
 
 ```text
 event: tool_call_start
-{"name": "retrieve_context", "display_name": "Retrieve Context"}
-```
-
-...followed by the individual research steps as they run:
-
-```text
-event: tool_call_start
-{"name": "kg_query", "display_name": "Kg Query"}
+{"name": "kg_search", "display_name": "KG Search"}
 
 event: tool_call
-{"name": "kg_query", "display_name": "Kg Query", "result": "{\"entity\":{\"id\":1,\"name\":\"TraveLodge\",...},...}"}
+{"name": "kg_search", "display_name": "KG Search", "result": "..."}
 ```
 
-In the terminal this renders as `🔧 Kg Query…` / `🔧 Kg Query → …` lines, so you can see Mimir actively researching instead of a single "Retrieve Context…" indicator that looks frozen. Research turns can take a minute or more, and the streaming connection stays alive throughout (the daemon sends keep-alive comments every 10s).
+Blocking requests use the same retrieval logic but do not stream nested progress events.
 
-## When Is It Used?
+## When It Helps
 
-The main LLM decides when to call `retrieve_context`. The system prompt encourages it to investigate whenever:
-- You mention a known entity (person, place, event)
-- You ask a subjective or personal question
-- The answer might depend on historical facts or preferences
+The main model should use `retrieve_context` when the answer may depend on personal facts, entity relationships, or conversation history rather than only the condensed memory block.
 
 ## Limitations
 
-- Each retrieval task is limited to **25 internal tool-call rounds**
-- Retrieval agents do **not** have access to external APIs or side-effect tools
-- The agent returns structured data, not prose — the main LLM synthesizes the final answer
+- Candidate discovery is token-based and searches the local knowledge graph; it does not use an LLM to invent entity names.
+- Relationship traversal remains bounded by the existing `kg_related` limits.
+- External APIs and side-effecting tools are not used by this stage.
+- A transient tool failure is omitted from that step's evidence; the retriever does not retry it.
+
+The broader recall engine work in issues #569–#571 will expand this boundary with richer query contracts, ranking, provenance, and token budgeting.

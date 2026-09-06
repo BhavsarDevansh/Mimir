@@ -107,9 +107,9 @@ fn warn_err_returns_none_on_err() {
 async fn init_knowledge_graph_resolves_user_entity_and_registers_kg_tools() {
     let temp = tempfile::tempdir().unwrap();
     let config = test_config(&temp);
-    let (tool_registry, context_manager, llm) = kg_init_inputs(&temp).await;
+    let (tool_registry, context_manager, _llm) = kg_init_inputs(&temp).await;
 
-    let init = init_knowledge_graph(&config, &tool_registry, &context_manager, &llm)
+    let init = init_knowledge_graph(&config, &tool_registry, &context_manager)
         .await
         .unwrap();
 
@@ -340,9 +340,9 @@ async fn init_knowledge_graph_disables_geocoder_when_configured_off() {
     let temp = tempfile::tempdir().unwrap();
     let mut config = test_config(&temp);
     config.geocoder.enabled = false;
-    let (tool_registry, context_manager, llm) = kg_init_inputs(&temp).await;
+    let (tool_registry, context_manager, _llm) = kg_init_inputs(&temp).await;
 
-    let init = init_knowledge_graph(&config, &tool_registry, &context_manager, &llm)
+    let init = init_knowledge_graph(&config, &tool_registry, &context_manager)
         .await
         .unwrap();
 
@@ -357,9 +357,9 @@ async fn init_knowledge_graph_disables_geocoder_when_configured_off() {
 async fn init_knowledge_graph_enables_geocoder_by_default() {
     let temp = tempfile::tempdir().unwrap();
     let config = test_config(&temp);
-    let (tool_registry, context_manager, llm) = kg_init_inputs(&temp).await;
+    let (tool_registry, context_manager, _llm) = kg_init_inputs(&temp).await;
 
-    let init = init_knowledge_graph(&config, &tool_registry, &context_manager, &llm)
+    let init = init_knowledge_graph(&config, &tool_registry, &context_manager)
         .await
         .unwrap();
 

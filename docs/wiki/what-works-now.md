@@ -36,7 +36,7 @@ Library crates provide code organisation:
 - `mimir-server` — Axum routes, state, middleware (library, no binary)
 - `mimir-client` — HTTP client for talking to the daemon
 - `mimir-api-types` — Shared request/response types
-- `mimir-knowledge` — SQLite knowledge graph: entities, facts, inference, memory, forgetting, optimization, librarian + retrieval agents
+- `mimir-knowledge` — SQLite knowledge graph: entities, facts, inference, memory, forgetting, optimization, librarian + deterministic retrieval
 - `mimir-connectors` — Connector framework: `Connector` trait, registry, supervisor, secret store, rate limiting, geocoder, and the Photos / CalDAV + Microsoft Graph Calendar / IMAP Email backends
 
 ---
@@ -145,7 +145,7 @@ All client commands talk to the daemon over HTTP except `mimir personality list`
 
 | Feature | Status | Notes & pending work |
 |---------|--------|----------------------|
-| Tool registry | ✅ Works | Object-safe `Tool` trait; per-tool permissions (auto/ask/disabled) persisted to `tools.toml`; factory-registered tools (e.g. `retrieve_context`) are rebuilt per request with the request-resolved LLM via `ToolContext`, so every tool dispatches through the same path with uniform permission checks ([#441](https://github.com/BhavsarDevansh/Mimir/issues/441)). |
+| Tool registry | ✅ Works | Object-safe `Tool` trait; per-tool permissions (auto/ask/disabled) persisted to `tools.toml`; factory-registered tools (e.g. `retrieve_context`) are rebuilt per request with request-scoped dependencies such as the streaming progress channel via `ToolContext`, so every tool dispatches through the same path with uniform permission checks ([#441](https://github.com/BhavsarDevansh/Mimir/issues/441)). |
 | Skill registry | ✅ Works | Object-safe `Skill` trait with `SkillContext`; built-in, user, and generated origins. |
 | Builtin tools | ✅ Works | `get_current_time` (local timezone + UTC offset, [#45](https://github.com/BhavsarDevansh/Mimir/issues/45) fixed), `echo`, `get_weather` (wttr.in, metric-only), `search_conversation_history`; knowledge-graph tools `kg_query`, `kg_related`, `kg_search`, `kg_expand_catalogue`, `kg_facts_in_catalogue`, `retrieve_context`. The `remember` tool was removed in [#386](https://github.com/BhavsarDevansh/Mimir/issues/386) — learning is now the server-side `remember.chat` hook. |
 | Builtin skills | ✅ Works | `research_synthesis`, `test_driven_development`. |
@@ -269,7 +269,7 @@ All client commands talk to the daemon over HTTP except `mimir personality list`
 |---------|--------|----------------------|
 | Librarian agent | ✅ Works | On-demand fact extraction from labelled transcripts; registered in the daemon but no longer auto-triggered every turn ([#137](https://github.com/BhavsarDevansh/Mimir/issues/137), [#139](https://github.com/BhavsarDevansh/Mimir/issues/139)). |
 | Automatic Librarian fallback | ✅ Superseded | Every non-incognito session gets debounced hook-driven extraction, so no fallback is needed ([#386](https://github.com/BhavsarDevansh/Mimir/issues/386) supersedes [#156](https://github.com/BhavsarDevansh/Mimir/issues/156)). |
-| Retrieval agent | ✅ Works | `retrieve_context` dispatches parallel retrieval agents (KG + conversation search, ≤ 25 rounds) ([#128](https://github.com/BhavsarDevansh/Mimir/issues/128)). |
+| Retrieval agent | ✅ Works | `retrieve_context` runs deterministic one-pass retrieval: task-token KG searches, one conversation search, then one facts query and one relationship traversal per distinct candidate ([#128](https://github.com/BhavsarDevansh/Mimir/issues/128), [#492](https://github.com/BhavsarDevansh/Mimir/issues/492)). |
 
 ---
 

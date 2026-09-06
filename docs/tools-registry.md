@@ -49,7 +49,7 @@ Object-safe async trait (via `async-trait`) that every tool implements:
 - Methods: `register`, `register_native_with_factory`, `register_with_factory`, `get`, `metadata`, `set_permission`, `list`, `export_openai_tools`, `execute`
 - Export helpers (issue #155): `export_openai_tools_filtered(allow_write_tools)` and `export_openai_tools_for_llm_with_writes(allow_write_tools)` filter write-capable tools out of the exported LLM tool set when `allow_write_tools` is `false`, while `is_write_tool(name)` only reports whether a named tool is write-capable. The execution-time guard that blocks write tools during incognito turns is the separate responsibility of `ToolRegistry::execute`. No built-in tool is currently write-capable (the `remember` tool was removed in #386 and replaced by the hooks engine), but the guard remains as defence-in-depth for future write tools.
 - `with_builtins()` creates a pre-populated registry with `GetCurrentTimeTool` and `EchoTool`
-- `execute(name, args, ctx)` applies the uniform checks — the incognito write-tool guard, the permission level, and factory resolution — before invoking the tool. `ToolContext` carries the per-request runtime dependencies (the request-resolved LLM and the incognito write-tool policy); tools registered with a `ToolFactory` (e.g. `retrieve_context`, issue #441) are rebuilt from the context on every call so request-scoped overrides are honoured, while the stored prototype instance continues to provide the schema for export.
+- `execute(name, args, ctx)` applies the uniform checks — the incognito write-tool guard, the permission level, and factory resolution — before invoking the tool. `ToolContext` carries the per-request runtime dependencies (the request-resolved LLM, the incognito write-tool policy, and optional progress); tools registered with a `ToolFactory` (e.g. `retrieve_context`, issue #441) are rebuilt from the context on every call so request-scoped dependencies are honoured, while the stored prototype instance continues to provide the schema for export.
 
 ### `ToolContext`
 
@@ -228,7 +228,7 @@ Changes are persisted to `tools.toml` immediately.
 When the LLM backend receives a request via the `/chat` endpoint, enabled tools are forwarded in the OpenAI `tools` field. If the model responds with `tool_calls` instead of text:
 
 1. Each tool call is extracted from the assistant message.
-2. `ToolRegistry::execute` is invoked with the parsed JSON arguments and a per-request `ToolContext` (request-resolved LLM + incognito write-tool policy). Factory-registered tools such as `retrieve_context` are rebuilt from the context before execution, so per-request model/temperature overrides are honoured (issue #441).
+2. `ToolRegistry::execute` is invoked with the parsed JSON arguments and a per-request `ToolContext` (request-resolved LLM + incognito write-tool policy). Factory-registered tools such as `retrieve_context` are rebuilt from the context before execution, so request-scoped dependencies are honoured (issue #441).
 3. Results are rendered with `ToolOutput::to_llm_text()` and sent back as `role: tool` messages.
 4. A follow-up LLM call produces the final assistant response, which is persisted to the session.
 

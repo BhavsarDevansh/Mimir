@@ -262,7 +262,7 @@ async fn test_chat_stream_executes_tool_calls_and_returns_final_response() {
 }
 
 #[tokio::test]
-async fn test_chat_executes_retrieve_context_through_registry() {
+async fn test_chat_executes_retrieve_context_without_inner_llm() {
     // The main chat call asks the model to run `retrieve_context`; the
     // retrieval agent then runs two internal rounds (kg_query, finish) on
     // the same request-resolved LLM before the main chat produces its final
@@ -276,29 +276,9 @@ async fn test_chat_executes_retrieve_context_through_registry() {
             arguments: serde_json::json!({"task": "Find Alice"}).to_string(),
         },
     };
-    let query_call = ToolCall {
-        index: 0,
-        id: "call_query".to_string(),
-        call_type: "function".to_string(),
-        function: FunctionCall {
-            name: "kg_query".to_string(),
-            arguments: serde_json::json!({"entity_name": "Alice"}).to_string(),
-        },
-    };
-    let finish_call = ToolCall {
-        index: 0,
-        id: "call_finish".to_string(),
-        call_type: "function".to_string(),
-        function: FunctionCall {
-            name: "finish_retrieval".to_string(),
-            arguments: "{}".to_string(),
-        },
-    };
     // The request resolves a *distinct* LLM backend through the model
-    // override, so the retrieval agent can only succeed if the registry
-    // factory rebuilds `retrieve_context` with the request-resolved LLM
-    // (`ctx.llm`) rather than the startup LLM captured at registration
-    // (issue #441).
+    // override. Deterministic retrieval must consume no additional LLM calls
+    // beyond the main tool-loop calls.
     let request_mock = Arc::new(
         MockLlmClient::builder()
             .push_chat_message(
@@ -306,24 +286,6 @@ async fn test_chat_executes_retrieve_context_through_registry() {
                     role: "assistant".to_string(),
                     content: "".to_string(),
                     tool_calls: Some(vec![retrieve_call]),
-                    tool_call_id: None,
-                },
-                Usage::default(),
-            )
-            .push_chat_message(
-                Message {
-                    role: "assistant".to_string(),
-                    content: "".to_string(),
-                    tool_calls: Some(vec![query_call]),
-                    tool_call_id: None,
-                },
-                Usage::default(),
-            )
-            .push_chat_message(
-                Message {
-                    role: "assistant".to_string(),
-                    content: "".to_string(),
-                    tool_calls: Some(vec![finish_call]),
                     tool_call_id: None,
                 },
                 Usage::default(),
@@ -368,19 +330,20 @@ async fn test_chat_executes_retrieve_context_through_registry() {
     let chat: ChatResponse = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(chat.response, "Found Alice's preferences.");
 
-    // Four LLM calls: main chat (retrieve_context) + two retrieval-agent
-    // rounds + main chat follow-up, all on the request-resolved backend.
-    // The retrieval agent's first call carries the research system prompt,
-    // proving the registry factory passed the request-resolved LLM through.
+    // Two LLM calls: the main tool-loop round and its follow-up. The
+    // retrieval tool itself runs entirely through deterministic Rust queries.
     let calls = request_mock.chat_calls();
     assert_eq!(
         calls.len(),
-        4,
-        "expected main chat + retrieval agent + follow-up calls on the request-resolved backend"
+        2,
+        "expected only the main tool-loop calls on the request-resolved backend"
     );
     assert!(
-        calls[1][0].content.contains("research subsystem"),
-        "retrieval agent should run on the request-resolved LLM"
+        !calls
+            .iter()
+            .flatten()
+            .any(|message| message.content.contains("research subsystem")),
+        "deterministic retrieval must not make an inner LLM call"
     );
     assert!(
         startup_mock.chat_calls().is_empty(),
@@ -400,25 +363,7 @@ async fn test_chat_stream_emits_retrieval_sub_tool_progress() {
         call_type: "function".to_string(),
         function: FunctionCall {
             name: "retrieve_context".to_string(),
-            arguments: serde_json::json!({"task": "Find Alice"}).to_string(),
-        },
-    };
-    let query_call = ToolCall {
-        index: 0,
-        id: "call_query".to_string(),
-        call_type: "function".to_string(),
-        function: FunctionCall {
-            name: "kg_query".to_string(),
-            arguments: serde_json::json!({"entity_name": "Alice"}).to_string(),
-        },
-    };
-    let finish_call = ToolCall {
-        index: 0,
-        id: "call_finish".to_string(),
-        call_type: "function".to_string(),
-        function: FunctionCall {
-            name: "finish_retrieval".to_string(),
-            arguments: "{}".to_string(),
+            arguments: serde_json::json!({"task": "Alice"}).to_string(),
         },
     };
     let mock = Arc::new(
@@ -428,26 +373,6 @@ async fn test_chat_stream_emits_retrieval_sub_tool_progress() {
                 Ok(StreamItem::ToolCalls(vec![retrieve_call])),
                 Ok(StreamItem::Usage(Usage::default())),
             ])
-            // Retrieval agent round 0: kg_query.
-            .push_chat_message(
-                Message {
-                    role: "assistant".to_string(),
-                    content: "".to_string(),
-                    tool_calls: Some(vec![query_call]),
-                    tool_call_id: None,
-                },
-                Usage::default(),
-            )
-            // Retrieval agent round 1: finish.
-            .push_chat_message(
-                Message {
-                    role: "assistant".to_string(),
-                    content: "".to_string(),
-                    tool_calls: Some(vec![finish_call]),
-                    tool_call_id: None,
-                },
-                Usage::default(),
-            )
             // Main handler stream 2: final answer.
             .push_stream(vec![
                 Ok(StreamItem::Text("Found Alice's preferences.".to_string())),
@@ -499,7 +424,7 @@ async fn test_chat_stream_emits_retrieval_sub_tool_progress() {
                 .ok()
                 .and_then(|v| v.get("name").and_then(|n| n.as_str()).map(String::from))
                 .as_deref()
-                == Some("kg_query")
+                == Some("kg_search")
     });
     assert!(
         start.is_some(),
@@ -507,13 +432,13 @@ async fn test_chat_stream_emits_retrieval_sub_tool_progress() {
         text
     );
     // The finish event must be a `tool_call` frame (not just the
-    // `tool_call_start` prefix) carrying the kg_query result.
+    // `tool_call_start` prefix) carrying the candidate search result.
     let finish = frames.iter().find(|(event, data)| {
         if *event != "tool_call" {
             return false;
         }
         serde_json::from_str::<mimir_api_types::ToolCallInfo>(data)
-            .map(|info| info.name == "kg_query" && info.result.contains("Entity not found"))
+            .map(|info| info.name == "kg_search" && info.result.contains("\"query\":\"Alice\""))
             .unwrap_or(false)
     });
     assert!(

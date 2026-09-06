@@ -49,8 +49,8 @@ pub async fn status_handler(State(state): State<Arc<AppState>>) -> Json<StatusRe
         llm_reachable,
         context_window,
         memory_exists,
-        memory_chars,
-        memory_limit,
-        memory_usage_pct,
+        memory_chars: usize::try_from(memory_chars).unwrap_or(usize::MAX),
+        memory_limit: usize::from(memory_limit),
+        memory_usage_pct: f64::from(memory_usage_pct),
     })
 }

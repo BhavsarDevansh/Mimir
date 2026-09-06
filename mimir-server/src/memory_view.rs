@@ -90,13 +90,13 @@ pub struct MemoryViewStates {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MemoryViewUsage {
     /// Number of Unicode scalar values in the core-plus-upcoming content.
-    pub char_count: usize,
+    pub char_count: u32,
     /// Configured maximum Unicode scalar values for prompt memory.
-    pub char_limit: usize,
+    pub char_limit: u16,
     /// Percentage of the configured character limit in use.
-    pub usage_percent: f64,
+    pub usage_percent: u8,
     /// Approximate token estimate using four characters per token.
-    pub token_estimate: usize,
+    pub token_estimate: u32,
     /// Whether the content is at or below the configured character limit.
     pub within_budget: bool,
 }
@@ -113,7 +113,7 @@ pub struct ComposedMemoryView {
     /// Configured number of days ahead for upcoming events.
     pub temporal_horizon_days: u8,
     /// Configured maximum Unicode scalar values for prompt memory.
-    pub char_limit: usize,
+    pub char_limit: u16,
     /// Whether condensed-memory loading was enabled and completed.
     pub core_available: bool,
     /// Whether core-memory loading failed.
@@ -152,34 +152,27 @@ impl ComposedMemoryView {
                     return String::new();
                 };
                 let upcoming = self.upcoming.as_deref().unwrap_or("");
-                let content = combine_core_and_upcoming(core, upcoming);
-                truncate_to_budget(&content, self.char_limit)
+                truncate_to_budget(core, upcoming, usize::from(self.char_limit))
             }
         }
     }
 }
 
-fn truncate_to_budget(content: &str, limit: usize) -> String {
+fn truncate_to_budget(core: &str, upcoming: &str, limit: usize) -> String {
     if limit == 0 {
         return String::new();
     }
-    if content.chars().count() <= limit {
-        return content.to_string();
+    let core_char_count = core.chars().count();
+    if core_char_count >= limit {
+        return take_chars(core, limit).to_string();
     }
 
-    let (core, upcoming) = match content.split_once("\n\n") {
-        Some((core, upcoming)) => (core, upcoming),
-        None => {
-            let truncated = take_chars(content, limit);
-            return truncated.to_string();
-        }
-    };
-
-    if core.chars().count() >= limit {
+    if upcoming.is_empty() {
         return core.to_string();
     }
-
-    let remaining = limit - core.chars().count() - 2;
+    let Some(remaining) = limit.checked_sub(core_char_count + 2) else {
+        return take_chars(core, limit).to_string();
+    };
     format!("{core}\n\n{}", take_chars(upcoming, remaining))
 }
 
@@ -199,18 +192,24 @@ fn combine_core_and_upcoming(core: &str, upcoming: &str) -> String {
     }
 }
 
-fn usage_for(content: &str, limit: usize) -> MemoryViewUsage {
-    let char_count = content.chars().count();
+fn usage_for(content: &str, limit: u16) -> MemoryViewUsage {
+    let character_count = content.chars().count();
+    let char_count = u32::try_from(character_count).unwrap_or(u32::MAX);
     MemoryViewUsage {
         char_count,
         char_limit: limit,
         usage_percent: if limit == 0 {
-            0.0
+            0
         } else {
-            (char_count as f64 / limit as f64) * 100.0
+            u8::try_from(
+                character_count
+                    .div_ceil(usize::from(limit))
+                    .saturating_mul(100),
+            )
+            .unwrap_or(u8::MAX)
         },
-        token_estimate: char_count.div_ceil(4),
-        within_budget: char_count <= limit,
+        token_estimate: u32::try_from(character_count.div_ceil(4)).unwrap_or(u32::MAX),
+        within_budget: character_count <= usize::from(limit),
     }
 }
 
@@ -218,7 +217,7 @@ fn usage_for(content: &str, limit: usize) -> MemoryViewUsage {
 pub async fn compose_memory_view(state: &Arc<AppState>) -> ComposedMemoryView {
     let config = state.config.snapshot().await;
     let now = state.knowledge_graph.now();
-    let char_limit = usize::from(config.memory.char_limit);
+    let char_limit = config.memory.char_limit;
     let temporal_horizon_days = config.memory.temporal_horizon;
 
     let (core_result, core_available) = if config.memory.enabled {
@@ -302,5 +301,70 @@ pub async fn compose_memory_view(state: &Arc<AppState>) -> ComposedMemoryView {
         usage,
         warnings,
         rendered,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn view(core: Option<&str>, upcoming: Option<&str>, char_limit: u16) -> ComposedMemoryView {
+        ComposedMemoryView {
+            core: core.map(str::to_string),
+            upcoming: upcoming.map(str::to_string),
+            now: Utc::now(),
+            temporal_horizon_days: 30,
+            char_limit,
+            core_available: core.is_some(),
+            core_degraded: false,
+            upcoming_available: upcoming.is_some(),
+            upcoming_degraded: false,
+            states: MemoryViewStates {
+                status: MemoryStatusState::Active,
+                confidence: MemoryConfidenceState::Unknown,
+                provenance: MemoryProvenanceState::Unavailable,
+                privacy: MemoryPrivacyState::NotEvaluated,
+                control: MemoryControlState::NotConfigured,
+            },
+            usage: usage_for("", char_limit),
+            warnings: Vec::new(),
+            rendered: String::new(),
+        }
+    }
+
+    #[test]
+    fn budgeted_render_preserves_a_multi_paragraph_core() {
+        let view = view(
+            Some("Core paragraph one\n\nCore paragraph two"),
+            Some("Upcoming details"),
+            60,
+        );
+        let rendered = view.render(BudgetPolicy::Budgeted);
+
+        assert!(rendered.starts_with("Core paragraph one\n\nCore paragraph two"));
+        assert!(rendered.contains("Upcoming"));
+        assert!(rendered.chars().count() <= 60);
+    }
+
+    #[test]
+    fn budgeted_render_truncates_core_when_it_alone_exceeds_the_limit() {
+        let core = "Core with an internal separator\n\nand a very long second paragraph";
+        let view = view(Some(core), Some("Upcoming details"), 40);
+        let rendered = view.render(BudgetPolicy::Budgeted);
+
+        assert_eq!(rendered.chars().count(), 40);
+        assert!(rendered.contains("Core with an internal separator"));
+    }
+
+    #[test]
+    fn budgeted_render_handles_a_core_one_char_below_the_limit() {
+        let core = "Core memory that nearly fills the configured char limit";
+        let view = view(
+            Some(core),
+            Some("Upcoming details"),
+            u16::try_from(core.chars().count() + 1).unwrap(),
+        );
+
+        assert!(view.render(BudgetPolicy::Budgeted).starts_with(core));
     }
 }

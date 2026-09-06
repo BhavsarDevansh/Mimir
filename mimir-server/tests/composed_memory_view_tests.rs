@@ -27,7 +27,10 @@ async fn composed_view_exposes_core_upcoming_and_budget_metadata() {
     assert_eq!(view.temporal_horizon_days, 30);
     assert_eq!(view.char_limit, 2500);
     assert_eq!(view.states.privacy, MemoryPrivacyState::NotEvaluated);
-    assert_eq!(view.usage.char_count, view.content().chars().count());
+    assert_eq!(
+        view.usage.char_count,
+        u32::try_from(view.content().chars().count()).unwrap()
+    );
     assert!(view.warnings.is_empty());
 }
 

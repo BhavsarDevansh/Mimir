@@ -89,6 +89,26 @@ fn bench_schema_init(c: &mut Criterion) {
     });
 }
 
+fn bench_schema_init_from_template(c: &mut Criterion) {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    c.bench_function("kg_schema_init_from_template", |b| {
+        b.iter_batched(
+            || tempfile::tempdir().unwrap(),
+            |dir| {
+                rt.block_on(async {
+                    let db_path = dir.path().join("kg.db");
+                    mimir_test_support::prepare_from_template(&db_path)
+                        .await
+                        .unwrap();
+                    let kg = KnowledgeGraph::init(&db_path).await.unwrap();
+                    std::hint::black_box(kg.pool());
+                });
+            },
+            BatchSize::SmallInput,
+        )
+    });
+}
+
 fn bench_fact_insert_small_graph(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
     c.bench_function("kg_fact_insert_small_graph", |b| {
@@ -289,6 +309,7 @@ fn bench_traverse_star_graph(c: &mut Criterion) {
 criterion_group!(
     kg_write_benches,
     bench_schema_init,
+    bench_schema_init_from_template,
     bench_fact_insert_small_graph,
     bench_fact_insert_same_subject_growth,
     bench_entity_create_with_aliases,

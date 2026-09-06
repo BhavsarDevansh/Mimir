@@ -1,0 +1,20 @@
+[package]
+name = "mimir-test-support"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Test-only database fixtures for Mimir workspace tests"
+repository.workspace = true
+homepage.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+mimir-knowledge = { path = "../mimir-knowledge" }
+sqlx.workspace = true
+tempfile = "3"
+tokio = { version = "1", features = ["fs", "macros", "rt", "sync"] }
+thiserror = "2.0"
+
+[dev-dependencies]

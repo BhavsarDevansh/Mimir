@@ -81,6 +81,8 @@ Core-agent timing tests avoid fixed wall-clock sleeps for timing transitions (is
 
 ## Running
 
+The `mimir-test-support` crate is a development-only fixture crate used by shared integration-test helpers. It creates one pre-migrated SQLite template per test binary and copies that template for each standard `TestGraph`, server `AppState`, or daemon E2E test. Migrations intentionally exercised by schema and migration tests continue to use `KnowledgeGraph::init` directly.
+
 ```bash
 # Whole workspace
 cargo test --workspace

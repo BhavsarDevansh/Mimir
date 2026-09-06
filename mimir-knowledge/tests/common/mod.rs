@@ -31,9 +31,11 @@ pub struct TestGraph {
 impl TestGraph {
     pub async fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        let db_path = dir.path().join("knowledge.db");
+        mimir_test_support::prepare_from_template(&db_path)
             .await
             .unwrap();
+        let kg = KnowledgeGraph::init(&db_path).await.unwrap();
         Self { kg, _dir: dir }
     }
 

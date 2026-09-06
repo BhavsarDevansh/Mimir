@@ -18,7 +18,7 @@ These tests exercise the full Axum HTTP stack without making real network calls.
 | `test_chat_unknown_session_returns_404` | `POST /chat` | default mock | HTTP 404 |
 | `test_memory_returns_content` | `GET /memory` | default mock | HTTP 200, body contains memory text |
 
-All tests use a temporary directory for the SQLite context database and a fresh `MockLlmClient` instance so they are fully isolated and parallel-safe.
+All tests use a temporary directory for the SQLite context database and a fresh `MockLlmClient` instance so they are fully isolated and parallel-safe. The shared server fixture creates the knowledge-graph database by copying a pre-migrated SQLite template, so every test still receives a clean database without re-running the 60 migrations.
 
 ### Server Test Waits (issue #534)
 

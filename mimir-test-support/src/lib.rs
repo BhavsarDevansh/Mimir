@@ -34,7 +34,7 @@ pub async fn init_from_template(db_path: &Path) -> Result<KnowledgeGraph, TestSu
 }
 
 /// Return the process-local path to the pre-migrated SQLite schema template.
-pub async fn template_path() -> Result<&'static Path, TestSupportError> {
+async fn template_path() -> Result<&'static Path, TestSupportError> {
     static TEMPLATE: OnceCell<TemplateSchema> = OnceCell::const_new();
     static TEMPLATE_INIT: OnceCell<Mutex<()>> = OnceCell::const_new();
     let _init_lock = TEMPLATE_INIT
@@ -68,16 +68,26 @@ async fn build_template() -> Result<TemplateSchema, TestSupportError> {
     let pool = knowledge_graph.pool().clone();
     drop(knowledge_graph);
     pool.close().await;
+    tokio::fs::remove_file(&source).await?;
 
     Ok(TemplateSchema { _dir: dir, path })
 }
 
 #[cfg(test)]
 mod tests {
+    use mimir_knowledge::KnowledgeGraph;
+
     #[tokio::test]
     async fn init_from_template_copies_migrated_schema() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("knowledge.db");
+        let expected_path = dir.path().join("expected.db");
+        let expected_knowledge_graph = KnowledgeGraph::init(&expected_path).await.unwrap();
+        let expected_migration_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations")
+                .fetch_one(expected_knowledge_graph.pool())
+                .await
+                .unwrap();
 
         let knowledge_graph = crate::init_from_template(&db_path).await.unwrap();
 
@@ -85,20 +95,14 @@ mod tests {
             .fetch_one(knowledge_graph.pool())
             .await
             .unwrap();
-        assert_eq!(migration_count, 60);
+        assert_eq!(migration_count, expected_migration_count);
     }
 
     #[tokio::test]
     async fn template_is_shared_across_copies() {
-        let dir = tempfile::tempdir().unwrap();
         let first = crate::template_path().await.unwrap();
         let second = crate::template_path().await.unwrap();
 
         assert_eq!(first, second);
-        assert_ne!(
-            first,
-            dir.path().join("copy.db"),
-            "the template must not live inside a per-test temporary directory"
-        );
     }
 }

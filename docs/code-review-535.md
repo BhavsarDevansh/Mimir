@@ -16,7 +16,11 @@ Reviewed `Cargo.toml`, `mimir-test-support/src/lib.rs`, `mimir-test-support/Carg
 | Versioning | The workspace version had not reflected the shipped test-infrastructure change. | Low | Bumped the workspace package version to `0.160.1`. |
 | Issue hygiene | The issue body still referred to 58 migrations although the workspace now has 60. | Low | Refreshed issue #535 to current reality. |
 | Workspace hygiene | A full-suite run exposed two existing Obsidian accounting failures unrelated to the fixture. | Medium | Filed issue #608 with reproduction and context instead of changing the unrelated import implementation. |
+| Public API surface | `template_path` exposed an internal fixture path that no downstream test used. | Low | Made `template_path` private while retaining it for the crate's own sharing test. |
+| Performance | The template builder retained the fully migrated source database in addition to the compact `VACUUM INTO` output. | Low | Removed the source file after the source pool is closed. |
+| Test correctness | The template test pinned the migration count at 60, so it required a manual edit after every schema addition. | Low | Compared the copied database against a fresh database's migration count dynamically. |
+| Test quality | The sharing test compared the template against an arbitrary unrelated path. | Low | Removed the meaningless assertion and retained the same-path assertion. |
 
 ## Verification
 
-All review findings were actioned. `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, the targeted template, knowledge, server, and E2E tests, and `cargo test --workspace --no-fail-fast` pass except for the two pre-existing Obsidian failures tracked in #608.
+All review findings were actioned. `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets -- -D warnings` pass. The targeted template, knowledge, server, and E2E tests pass. `cargo test --workspace --no-fail-fast` passes except for the two pre-existing Obsidian failures tracked in #608.

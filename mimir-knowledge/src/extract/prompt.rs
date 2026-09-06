@@ -2,17 +2,18 @@
 
 use mimir_core::conversation::ConversationMessage;
 use mimir_core::personality::Personality;
-
-use std::collections::{HashMap, HashSet};
-use std::fmt::Write as _;
+use mimir_core::tools::snake_to_title_case;
 
 use crate::graph::EmitEligiblePredicate;
 use crate::models::category::Category;
 use crate::{KnowledgeError, KnowledgeGraph};
+use std::collections::{HashMap, HashSet};
 
-/// Render a category name as one prompt-safe line.
-fn category_display_name(name: &str) -> String {
-    name.split_whitespace().collect::<Vec<_>>().join(" ")
+/// Render free-form taxonomy text as one prompt-safe line: whitespace
+/// (including newlines) collapses to single spaces, so DB-sourced labels and
+/// guidance cannot forge labelled lines or section headers in the prompt.
+fn render_prompt_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Render every category and its descendants for the extraction prompt.
@@ -50,7 +51,7 @@ async fn build_category_guide(kg: &KnowledgeGraph) -> Result<String, KnowledgeEr
         guide.push_str(&format!(
             "{} {}\n",
             category.id,
-            category_display_name(&category.name)
+            render_prompt_line(&category.name)
         ));
 
         let children = children_by_parent
@@ -106,24 +107,29 @@ fn build_predicate_standards(predicates: &[EmitEligiblePredicate]) -> String {
     for predicate in predicates {
         if current_root != Some(predicate.root_name.as_str()) {
             current_root = Some(&predicate.root_name);
-            let _ = writeln!(standards, "\n- {}", capitalise(&predicate.root_name));
+            standards.push_str(&format!(
+                "\n- {}\n",
+                root_display_name(&predicate.root_name)
+            ));
         }
+        standards.push_str(&format!("  * {}", render_prompt_line(&predicate.name)));
         if predicate.guidance.is_empty() {
-            let _ = writeln!(standards, "  * {}", predicate.name);
+            standards.push('\n');
         } else {
-            let _ = writeln!(standards, "  * {} — {}", predicate.name, predicate.guidance);
+            standards.push_str(&format!(" — {}\n", render_prompt_line(&predicate.guidance)));
         }
     }
     standards
 }
 
-/// Uppercase the first character of a taxonomy label; an empty label renders
-/// as `General` so orphaned leaves still group under a heading.
-fn capitalise(name: &str) -> String {
-    let mut chars = name.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-        None => String::from("General"),
+/// Display heading for a taxonomy root: Title-Case the snake_case label
+/// (reusing the shared `mimir_core` display helper), with `General` as the
+/// heading for orphaned leaves so they still group under something.
+fn root_display_name(root_name: &str) -> String {
+    if root_name.is_empty() {
+        String::from("General")
+    } else {
+        snake_to_title_case(root_name)
     }
 }
 

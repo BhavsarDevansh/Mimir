@@ -14,6 +14,10 @@
 
 Connectors never hold a `sqlx` pool handle. All persistence goes through the [`mimir_knowledge::KnowledgeGraph`] facade. Accordingly, `mimir-connectors` depends on `mimir-core` and `mimir-knowledge` **only** and does **not** declare a direct `sqlx` dependency (it enters the build graph only transitively, via `mimir-knowledge`'s internal use).
 
+## Connector row columns (issue #560)
+
+Connector registry reads and row-returning writes share one compile-time `connector_column_list` macro. Every `SELECT` and `RETURNING` projection uses that same source of truth, so adding a `connectors` column only requires the model/schema and the shared projection list to move together. The macro expands into a static SQL string, preserving SQLx's safe-static-SQL guarantee and all bind order/error semantics without runtime SQL construction or escaping.
+
 ## Shared ingestion boundary (F4 / #181)
 
 The resolve → confidence → sensitivity-gate → insert orchestration lives in `mimir-knowledge::normalize` as a single reusable function, so connector ingestion and the `remember.chat` hook's conversational extraction share one deterministic Rust pipeline:
@@ -352,6 +356,9 @@ CREATE TABLE connectors (
   auth_state_id INTEGER NOT NULL DEFAULT 1 REFERENCES connector_auth_states(id),
   sync_cursor TEXT,
   durable_state TEXT,
+  facts_accepted INTEGER NOT NULL DEFAULT 0,
+  facts_dropped INTEGER NOT NULL DEFAULT 0,
+  facts_staged INTEGER NOT NULL DEFAULT 0,
   last_sync_at TIMESTAMP,
   last_error TEXT,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -359,7 +366,7 @@ CREATE TABLE connectors (
 );
 ```
 
-Two lookup tables mirror the `event_statuses` pattern: `connector_statuses` (`Setup=1`, `Active=2`, `Paused=3`, `Error=4`) and `connector_auth_states` (`Unauthenticated=1`, `Authenticated=2`, `Expired=3`). The Rust enums `ConnectorStatus` and `ConnectorAuthState` (`#[repr(i16)]`, `sqlx::Type`) live in `mimir-knowledge/src/models/enums.rs`. This deliberately uses typed integer enums rather than the `TEXT` columns proposed in the issue, to match the rest of the knowledge-graph schema and the project's "smallest data type" rule.
+Two lookup tables mirror the `event_statuses` pattern: `connector_statuses` (`Setup=1`, `Active=2`, `Paused=3`, `Error=4`) and `connector_auth_states` (`Unauthenticated=1`, `Authenticated=2`, `Expired=3`). The Rust enums `ConnectorStatus` and `ConnectorAuthState` (`#[repr(i16)]`, `sqlx::Type`) live in `mimir-knowledge/src/models/enums.rs`. This deliberately uses typed integer enums rather than the `TEXT` columns proposed in the issue, to match the rest of the knowledge-graph schema and the project's "smallest data type" rule. Migration `042_create_connectors.sql` establishes the initial table, while migrations `057_connector_fact_acceptance.sql` and `060_closed_taxonomy_and_staging.sql` add the shared schema's acceptance, dropped, and staged counters.
 
 > The `sources.connector_instance_id` provenance FK and the `SELECT COUNT(*) FROM sources WHERE connector_instance_id = ?` item-count query landed in **F3 (#180)**: see [Sources provenance FK (F3)](#sources-provenance-fk-f3).
 

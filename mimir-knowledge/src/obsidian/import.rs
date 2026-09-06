@@ -43,6 +43,7 @@ pub struct ObsidianFile {
 #[derive(Default)]
 struct ObjectResolutionCache {
     resolved: HashMap<String, ResolvedEntity>,
+    renamed: HashSet<String>,
     allowed_object_types: HashMap<(i16, i16), EntityType>,
 }
 
@@ -75,6 +76,14 @@ impl ObjectResolutionCache {
 
     fn remove_entity(&mut self, entity_id: i32) {
         self.resolved.retain(|_, entity| entity.id != entity_id);
+    }
+
+    fn mark_renamed(&mut self, old_name: &str) {
+        self.renamed.insert(old_name.to_ascii_lowercase());
+    }
+
+    fn is_renamed(&self, name: &str) -> bool {
+        self.renamed.contains(&name.to_ascii_lowercase())
     }
 }
 
@@ -364,6 +373,9 @@ async fn import_document(
                     apply_entity_updates(kg, &existing, &document, dry_run).await?;
                 if changed {
                     object_cache.remove_entity(entity.id);
+                    if document_renames_entity(&existing, &document) {
+                        object_cache.mark_renamed(&existing.name);
+                    }
                     outcome.counts.entities_updated += 1;
                 }
                 Some(entity)
@@ -408,6 +420,9 @@ async fn import_document(
             let (entity, changed) = apply_entity_updates(kg, &entity, &document, dry_run).await?;
             if changed {
                 object_cache.remove_entity(entity.id);
+                if document_renames_entity(&entity, &document) {
+                    object_cache.mark_renamed(&entity.name);
+                }
                 outcome.counts.entities_updated += 1;
             }
             Some(entity)
@@ -656,15 +671,18 @@ async fn plan_object(
             if let Some((canonical_name, id)) = context.object_cache.get_resolved(name) {
                 return Ok((canonical_name, Some(id)));
             }
-            let results =
-                queries::entity::get_by_name_typed(kg.pool(), name, EntityType::Concept).await?;
-            if let Some(entity) = pick_resolution(&results) {
-                context.object_cache.remember(name, entity);
-                return Ok((entity.name.clone(), Some(entity.id)));
-            }
-            if let Some(entity) = queries::entity::get_exact_name(kg.pool(), name).await? {
-                context.object_cache.remember(name, &entity);
-                return Ok((entity.name.clone(), Some(entity.id)));
+            if !context.object_cache.is_renamed(name) {
+                let results =
+                    queries::entity::get_by_name_typed(kg.pool(), name, EntityType::Concept)
+                        .await?;
+                if let Some(entity) = pick_resolution(&results) {
+                    context.object_cache.remember(name, entity);
+                    return Ok((entity.name.clone(), Some(entity.id)));
+                }
+                if let Some(entity) = queries::entity::get_exact_name(kg.pool(), name).await? {
+                    context.object_cache.remember(name, &entity);
+                    return Ok((entity.name.clone(), Some(entity.id)));
+                }
             }
             let object_type = allowed_object_type(
                 kg,
@@ -740,12 +758,7 @@ async fn apply_entity_updates(
     let type_changed = document
         .entity_type
         .is_some_and(|declared| EntityType::try_from(entity.entity_type_id).ok() != Some(declared));
-    // Only an explicit `# heading` renames: a heading-less note (file-stem
-    // fallback) never renames the stored entity.
-    let name_changed = document
-        .heading
-        .as_ref()
-        .is_some_and(|heading| entity.name != *heading);
+    let name_changed = document_renames_entity(entity, document);
     let known_aliases: Vec<String> = entity
         .aliases
         .as_deref()
@@ -782,6 +795,15 @@ async fn apply_entity_updates(
         entity.clone(),
         name_changed || type_changed || !aliases_missing.is_empty(),
     ))
+}
+
+/// Only an explicit `# heading` renames: a heading-less note (file-stem
+/// fallback) never renames the stored entity.
+fn document_renames_entity(entity: &Entity, document: &ParsedDocument) -> bool {
+    document
+        .heading
+        .as_ref()
+        .is_some_and(|heading| entity.name != *heading)
 }
 
 fn normalized_fact(

@@ -695,6 +695,18 @@ type: Person
         .to_string(),
     };
 
+    let dry_run = kg
+        .import_obsidian(&[devansh.clone(), rename.clone(), bob.clone()], true)
+        .await
+        .unwrap();
+    assert_eq!(dry_run.counts.entities_updated, 1, "{:?}", dry_run.counts);
+    assert_eq!(
+        dry_run.counts.entities_new, 3,
+        "dry-run agrees with apply: {:?}",
+        dry_run.counts
+    );
+    assert_eq!(dry_run.counts.facts_new, 2, "{:?}", dry_run.counts);
+
     let outcome = kg
         .import_obsidian(&[devansh, rename, bob], false)
         .await

@@ -552,7 +552,7 @@ type: Person
     };
     let outcome = kg.import_obsidian(&[file], false).await.unwrap();
     assert_eq!(outcome.errors.len(), 0, "errors: {:?}", outcome.errors);
-    assert_eq!(outcome.counts.facts_new, 0);
+    assert_eq!(outcome.counts.facts_new, 1);
 }
 
 #[tokio::test]
@@ -633,7 +633,7 @@ type: Person
 
 ## Relationships
 - has_partner → [[Alice]] (since 2022-01-01)
-- knows → [[Alice]]
+- has_sibling → [[Alice]]
 "#
         .to_string(),
     };

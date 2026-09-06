@@ -53,9 +53,9 @@ impl KnowledgeGraph {
     pub async fn list_emit_eligible_relationship_types(
         &self,
     ) -> Result<Vec<EmitEligiblePredicate>, KnowledgeError> {
-        let rows: Vec<(String, String, String)> = sqlx::query_as(
+        let rows: Vec<(String, String, String, String)> = sqlx::query_as(
             "SELECT t.name, COALESCE(root.name, ''), \
-                    COALESCE(NULLIF(t.description, ''), t.definition) \
+                    t.description, t.definition \
              FROM relationship_types t \
              LEFT JOIN relationship_types root ON root.id = t.parent_id \
              WHERE t.emit_eligible = TRUE \
@@ -65,11 +65,17 @@ impl KnowledgeGraph {
         .await?;
         Ok(rows
             .into_iter()
-            .map(|(name, root_name, guidance)| EmitEligiblePredicate {
-                name,
-                root_name,
-                guidance,
-            })
+            .map(
+                |(name, root_name, description, definition)| EmitEligiblePredicate {
+                    name,
+                    root_name,
+                    guidance: if description.trim().is_empty() {
+                        definition
+                    } else {
+                        description
+                    },
+                },
+            )
             .collect())
     }
 

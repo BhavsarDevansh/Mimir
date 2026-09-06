@@ -112,7 +112,7 @@ fn build_predicate_standards(predicates: &[EmitEligiblePredicate]) -> String {
                 root_display_name(&predicate.root_name)
             ));
         }
-        standards.push_str(&format!("  * {}", render_prompt_line(&predicate.name)));
+        standards.push_str(&format!("  * {}", predicate.name));
         if predicate.guidance.is_empty() {
             standards.push('\n');
         } else {

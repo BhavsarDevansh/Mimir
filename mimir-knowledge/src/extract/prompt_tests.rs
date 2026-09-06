@@ -277,6 +277,53 @@ async fn prompt_normalises_whitespace_in_predicate_standards() {
 }
 
 #[tokio::test]
+async fn prompt_preserves_canonical_predicate_name_for_tool_schema() {
+    let (kg, _dir) = fresh_kg().await;
+    sqlx::query(
+        "INSERT INTO relationship_types (name, description, node_kind, emit_eligible, depth) \
+         VALUES ('taxonomy  probe_predicate', 'Subject has a taxonomy probe', 'leaf', TRUE, 1)",
+    )
+    .execute(kg.pool())
+    .await
+    .unwrap();
+
+    let prompt = build_base_prompt(&kg).await.unwrap();
+    let names = kg
+        .list_emit_eligible_relationship_type_names()
+        .await
+        .unwrap();
+    let schema = remember_tool_schema(&names);
+
+    assert!(prompt.contains("  * taxonomy  probe_predicate"));
+    assert!(names.iter().any(|name| name == "taxonomy  probe_predicate"));
+    assert!(schema["function"]["parameters"]["properties"]["facts"]["items"]
+        ["properties"]["relationship_type"]["enum"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|value| value == "taxonomy  probe_predicate"));
+}
+
+#[tokio::test]
+async fn prompt_falls_back_from_whitespace_only_description_to_definition() {
+    let (kg, _dir) = fresh_kg().await;
+    sqlx::query(
+        "INSERT INTO relationship_types \
+         (name, description, definition, node_kind, emit_eligible, depth) \
+         VALUES ('taxonomy_probe_predicate', ' \t\n', 'Subject has a probe', \
+                 'leaf', TRUE, 1)",
+    )
+    .execute(kg.pool())
+    .await
+    .unwrap();
+
+    let prompt = build_base_prompt(&kg).await.unwrap();
+
+    assert!(prompt.contains("  * taxonomy_probe_predicate — Subject has a probe"));
+    assert!(!prompt.contains("  * taxonomy_probe_predicate — \t\n"));
+}
+
+#[tokio::test]
 async fn prompt_omits_non_emit_eligible_predicates() {
     let (kg, _dir) = fresh_kg().await;
     let prompt = build_base_prompt(&kg).await.unwrap();

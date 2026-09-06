@@ -429,7 +429,9 @@ async fn multiple_atemporal_facts_different_objects_all_persist() {
     }
 
     // Query by subject+pred should return all three.
-    let hobby_rt_id = kg.ensure_relationship_type("hobby").await.unwrap();
+    let hobby_rt_id = common::ensure_relationship_type(&kg, "hobby")
+        .await
+        .unwrap();
     let all_facts = kg
         .get_facts_by_subject_and_predicate(alice, hobby_rt_id)
         .await

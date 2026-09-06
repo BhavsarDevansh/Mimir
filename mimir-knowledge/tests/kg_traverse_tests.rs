@@ -240,7 +240,9 @@ async fn test_kg_traverse_predicate_filter() {
     tg.kg.insert_fact(f1).await.unwrap();
     tg.kg.insert_fact(f2).await.unwrap();
 
-    let pred_id = tg.kg.ensure_relationship_type("has_partner").await.unwrap();
+    let pred_id = common::ensure_relationship_type(&tg.kg, "has_partner")
+        .await
+        .unwrap();
     let result = traverse_graph(tg.kg.pool(), a as u32, 1, 50, Some(&[pred_id]))
         .await
         .unwrap();

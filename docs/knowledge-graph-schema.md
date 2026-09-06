@@ -320,24 +320,17 @@ The `UNION` (not `UNION ALL`) deduplicates relationship-type ids, so a type reac
 
 Alias resolution is normalized (`trim`, lowercase, spaces → underscores) and cached in `RelationshipTypeCache`.
 
-### Alias-Aware `ensure_relationship_type`
+### Alias-Aware Strict Resolution
 
-`ensure_relationship_type` is the single source of truth for resolving a relationship-type name to a canonical id:
-
-1. Normalize the incoming name.
-2. Query `relationship_type_aliases` for the normalized name. On hit, return the canonical `relationship_type_id`.
-3. On miss, create a new canonical row in `relationship_types` and immediately register the normalized name as a self-alias.
-
-Because every canonical name has a self-alias, the alias table is the only lookup source needed by both `ensure_relationship_type` and `get_relationship_type_id`.
+`get_relationship_type_id` is the non-mutating lookup boundary: it normalizes the name, queries `relationship_type_aliases`, caches the hit, and returns `None` when the vocabulary is unknown. Because every canonical name has a self-alias, the alias table is the only lookup source needed for resolution.
 
 ### Strict Allow-List Resolution (`resolve_canonical_relationship_type`)
 
-The conversational extraction path (issue #401) uses `resolve_canonical_relationship_type` instead of `ensure_relationship_type`. It resolves the name through the alias table exactly like `ensure_relationship_type`, but then requires the resolved canonical type to be part of the seeded `CANONICAL_PREDICATES` allow-list:
+The conversational extraction path (issue #401) uses `resolve_canonical_relationship_type`. It resolves the name through the alias table, then requires the resolved canonical type to be an emit-eligible seeded leaf:
 
-1. The prompt-instructed `favourite_<thing>` family is accepted as an open set (the specific favourite is auto-created on first use).
-2. A name that resolves via `relationship_type_aliases` to a seeded canonical type is accepted.
-3. A name that resolves to a runtime-auto-created type is rejected — the row exists but is not canonical (connector-emitted predicates have been seeded canonical since migration `053`, issue #412, so a genuine auto-created row is vocabulary pollution, not a missing seed).
-4. Any other name is rejected with a clear `Validation` error; no row is created.
+1. A name that resolves via `relationship_type_aliases` to a seeded canonical type is accepted.
+2. A non-emitting test-only fixture row is rejected because it is not seed data.
+3. Any other name is rejected with a clear `Validation` error; no row is created.
 
 The allow-list is pinned to the seed by `canonical_const_matches_seeded_relationship_types` in `mimir-knowledge/tests/predicate_allowlist_test.rs`, so a seed change without a matching allow-list update fails CI.
 
@@ -353,9 +346,7 @@ These checks are centralized in two helpers (`canonical_name_conflicts_with_alia
 - `insert_relationship_type`
 - `insert_relationship_type_alias`
 
-`ensure_relationship_type` resolves aliases first, so a name that matches an existing alias returns the canonical id rather than attempting to create a conflicting canonical type.
-
-Both the permissive boundary (`ensure_relationship_type`, used by connector-provenance facts, issue #136) and the conversational allow-list (`resolve_canonical_relationship_type`, issue #401) resolve names through the `relationship_type_aliases` table — the sole source of truth for predicate canonicalization. The hardcoded `normalize_predicate` synonym map and the duplicate snake_case helper that previously lived in `mimir-knowledge/src/extract/` have been removed; all legacy synonyms are seeded as data by migrations `036`/`037`.
+`get_relationship_type_id` resolves aliases first, so a name that matches an existing alias returns the canonical id. Both the non-mutating lookup and the conversational strict resolver (`resolve_canonical_relationship_type`, issue #401) treat `relationship_type_aliases` as the sole source of truth for predicate canonicalization. The old public `ensure_relationship_type` auto-creation boundary was removed in issue #559; the hardcoded `normalize_predicate` synonym map and the duplicate snake_case helper that previously lived in `mimir-knowledge/src/extract/` had already been removed, and all legacy synonyms remain seeded as data by migrations `036`/`037`.
 
 ---
 

@@ -15,11 +15,10 @@ async fn seed_fact(state: &AppState, entity_name: &str, relationship_type: &str,
         .create_entity(entity_name, EntityType::Person, &[])
         .await
         .unwrap();
-    let pred_id = state
-        .knowledge_graph
-        .ensure_relationship_type(relationship_type)
-        .await
-        .unwrap();
+    let pred_id =
+        mimir_test_support::ensure_relationship_type(&state.knowledge_graph, relationship_type)
+            .await
+            .unwrap();
     queries::fact::insert_fact(
         state.knowledge_graph.pool(),
         &NewFact {

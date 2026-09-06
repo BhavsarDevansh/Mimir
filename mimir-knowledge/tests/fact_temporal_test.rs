@@ -268,7 +268,9 @@ async fn get_active_facts_at_half_open_boundary() {
     let active = kg
         .get_active_facts_at(
             alice,
-            kg.ensure_relationship_type("is_in").await.unwrap(),
+            common::ensure_relationship_type(&kg, "is_in")
+                .await
+                .unwrap(),
             boundary,
         )
         .await
@@ -323,7 +325,9 @@ async fn get_active_facts_at_filters_by_active_status() {
     let active = kg
         .get_active_facts_at(
             alice,
-            kg.ensure_relationship_type("is_in").await.unwrap(),
+            common::ensure_relationship_type(&kg, "is_in")
+                .await
+                .unwrap(),
             Utc::now(),
         )
         .await

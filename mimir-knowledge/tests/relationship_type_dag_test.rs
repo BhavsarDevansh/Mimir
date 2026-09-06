@@ -2,6 +2,8 @@
 
 use mimir_knowledge::KnowledgeError;
 use mimir_knowledge::KnowledgeGraph;
+
+mod common;
 use std::path::PathBuf;
 
 async fn setup() -> (tempfile::TempDir, KnowledgeGraph) {
@@ -30,12 +32,15 @@ async fn migration_creates_dag_tables() {
 async fn insert_hierarchy_and_query_descendants() {
     let (_dir, kg) = setup().await;
 
-    let parent = kg.ensure_relationship_type("located").await.unwrap();
-    let child = kg.ensure_relationship_type("located_in").await.unwrap();
+    let parent = common::ensure_relationship_type(&kg, "located")
+        .await
+        .unwrap();
+    let child = common::ensure_relationship_type(&kg, "located_in")
+        .await
+        .unwrap();
     // `is_in` is a seeded alias of `located_in` (migration 051), so use a
     // fresh name for the grandchild to keep three distinct types.
-    let grandchild = kg
-        .ensure_relationship_type("is_contained_in")
+    let grandchild = common::ensure_relationship_type(&kg, "is_contained_in")
         .await
         .unwrap();
 
@@ -65,9 +70,15 @@ async fn insert_hierarchy_and_query_descendants() {
 async fn dag_with_multiple_parents_deduplicates_reachable_ids() {
     let (_dir, kg) = setup().await;
 
-    let root = kg.ensure_relationship_type("spatial").await.unwrap();
-    let mid = kg.ensure_relationship_type("located").await.unwrap();
-    let leaf = kg.ensure_relationship_type("is_in").await.unwrap();
+    let root = common::ensure_relationship_type(&kg, "spatial")
+        .await
+        .unwrap();
+    let mid = common::ensure_relationship_type(&kg, "located")
+        .await
+        .unwrap();
+    let leaf = common::ensure_relationship_type(&kg, "is_in")
+        .await
+        .unwrap();
 
     // leaf has two parents: root and mid, and mid is also a child of root.
     kg.insert_relationship_type_hierarchy(mid, root)
@@ -223,7 +234,9 @@ async fn consolidated_predicates_resolve_as_aliases() {
 #[tokio::test]
 async fn empty_alias_is_rejected() {
     let (_dir, kg) = setup().await;
-    let id = kg.ensure_relationship_type("has_quality").await.unwrap();
+    let id = common::ensure_relationship_type(&kg, "has_quality")
+        .await
+        .unwrap();
 
     let err = kg
         .insert_relationship_type_alias("   ", id)
@@ -243,7 +256,9 @@ async fn empty_alias_is_rejected() {
 async fn insert_alias_and_resolve() {
     let (_dir, kg) = setup().await;
 
-    let id = kg.ensure_relationship_type("studied_at").await.unwrap();
+    let id = common::ensure_relationship_type(&kg, "studied_at")
+        .await
+        .unwrap();
     kg.insert_relationship_type_alias("test_attended_alias", id)
         .await
         .unwrap();
@@ -262,10 +277,12 @@ async fn insert_alias_and_resolve() {
 }
 
 #[tokio::test]
-async fn ensure_relationship_type_resolves_alias_instead_of_conflicting() {
+async fn test_fixture_resolves_alias_instead_of_conflicting() {
     let (_dir, kg) = setup().await;
 
-    let existing_id = kg.ensure_relationship_type("works_at").await.unwrap();
+    let existing_id = common::ensure_relationship_type(&kg, "works_at")
+        .await
+        .unwrap();
     let alias_id = kg
         .resolve_relationship_type_alias("employer")
         .await
@@ -273,9 +290,11 @@ async fn ensure_relationship_type_resolves_alias_instead_of_conflicting() {
         .expect("seeded works_for alias");
     assert_eq!(alias_id, existing_id);
 
-    // "test_employer_alias" is an alias, so ensure_relationship_type resolves it to the
+    // "test_employer_alias" is an alias, so the test fixture resolves it to the
     // canonical type rather than creating a new one or failing.
-    let resolved_id = kg.ensure_relationship_type("employer").await.unwrap();
+    let resolved_id = common::ensure_relationship_type(&kg, "employer")
+        .await
+        .unwrap();
     assert_eq!(resolved_id, existing_id);
 }
 
@@ -283,8 +302,12 @@ async fn ensure_relationship_type_resolves_alias_instead_of_conflicting() {
 async fn alias_unique_globally() {
     let (_dir, kg) = setup().await;
 
-    let id_a = kg.ensure_relationship_type("type_a").await.unwrap();
-    let id_b = kg.ensure_relationship_type("type_b").await.unwrap();
+    let id_a = common::ensure_relationship_type(&kg, "type_a")
+        .await
+        .unwrap();
+    let id_b = common::ensure_relationship_type(&kg, "type_b")
+        .await
+        .unwrap();
 
     kg.insert_relationship_type_alias("shared", id_a)
         .await
@@ -304,7 +327,9 @@ async fn alias_unique_globally() {
 #[tokio::test]
 async fn self_loop_rejected() {
     let (_dir, kg) = setup().await;
-    let id = kg.ensure_relationship_type("self_loop").await.unwrap();
+    let id = common::ensure_relationship_type(&kg, "self_loop")
+        .await
+        .unwrap();
 
     let err = kg
         .insert_relationship_type_hierarchy(id, id)
@@ -316,9 +341,15 @@ async fn self_loop_rejected() {
 #[tokio::test]
 async fn cycle_detection_rejects_indirect_cycle() {
     let (_dir, kg) = setup().await;
-    let a = kg.ensure_relationship_type("cycle_a").await.unwrap();
-    let b = kg.ensure_relationship_type("cycle_b").await.unwrap();
-    let c = kg.ensure_relationship_type("cycle_c").await.unwrap();
+    let a = common::ensure_relationship_type(&kg, "cycle_a")
+        .await
+        .unwrap();
+    let b = common::ensure_relationship_type(&kg, "cycle_b")
+        .await
+        .unwrap();
+    let c = common::ensure_relationship_type(&kg, "cycle_c")
+        .await
+        .unwrap();
 
     kg.insert_relationship_type_hierarchy(b, a).await.unwrap();
     kg.insert_relationship_type_hierarchy(c, b).await.unwrap();
@@ -334,7 +365,9 @@ async fn cycle_detection_rejects_indirect_cycle() {
 async fn get_relationship_type_includes_parents_and_aliases() {
     let (_dir, kg) = setup().await;
 
-    let parent_id = kg.ensure_relationship_type("located").await.unwrap();
+    let parent_id = common::ensure_relationship_type(&kg, "located")
+        .await
+        .unwrap();
     let rt = mimir_knowledge::models::relationship_type::NewRelationshipType {
         name: "contained_in".to_string(),
         description: None,
@@ -363,9 +396,10 @@ async fn get_relationship_type_includes_parents_and_aliases() {
 async fn alias_cannot_shadow_canonical_name() {
     let (_dir, kg) = setup().await;
 
-    let _canonical_id = kg.ensure_relationship_type("works_at").await.unwrap();
-    let other_id = kg
-        .ensure_relationship_type("test_employer_alias")
+    let _canonical_id = common::ensure_relationship_type(&kg, "works_at")
+        .await
+        .unwrap();
+    let other_id = common::ensure_relationship_type(&kg, "test_employer_alias")
         .await
         .unwrap();
 
@@ -385,14 +419,17 @@ async fn alias_cannot_shadow_canonical_name() {
 async fn alias_resolution_returns_canonical_id() {
     let (_dir, kg) = setup().await;
 
-    let id = kg.ensure_relationship_type("studied_at").await.unwrap();
+    let id = common::ensure_relationship_type(&kg, "studied_at")
+        .await
+        .unwrap();
     kg.insert_relationship_type_alias("test_alumni_alias", id)
         .await
         .unwrap();
 
     // The alias table is the single source of truth for predicate resolution
     // (issue #136). The extraction pipeline routes through
-    // `ensure_relationship_type`, which resolves aliases like this one; here we
+    // `mimir-test-support::ensure_relationship_type`, which resolves aliases
+    // like this one; here we
     // verify the resolution primitive directly, and the extraction integration
     // tests cover the full path.
     let resolved = kg
@@ -406,7 +443,9 @@ async fn alias_resolution_returns_canonical_id() {
 async fn insert_relationship_type_rejects_canonical_name_that_shadows_alias() {
     let (_dir, kg) = setup().await;
 
-    let _existing_id = kg.ensure_relationship_type("works_at").await.unwrap();
+    let _existing_id = common::ensure_relationship_type(&kg, "works_at")
+        .await
+        .unwrap();
     kg.insert_relationship_type_alias("test_employer_alias", _existing_id)
         .await
         .unwrap();
@@ -431,7 +470,9 @@ async fn insert_relationship_type_rejects_canonical_name_that_shadows_alias() {
 async fn insert_relationship_type_rejects_alias_that_shadows_canonical_name() {
     let (_dir, kg) = setup().await;
 
-    let _canonical_id = kg.ensure_relationship_type("works_at").await.unwrap();
+    let _canonical_id = common::ensure_relationship_type(&kg, "works_at")
+        .await
+        .unwrap();
 
     let rt = mimir_knowledge::models::relationship_type::NewRelationshipType {
         name: "new_type".to_string(),
@@ -457,7 +498,9 @@ async fn transactional_fact_insert_resolves_relationship_type_alias() {
 
     let (_dir, kg) = setup().await;
 
-    let existing_id = kg.ensure_relationship_type("works_at").await.unwrap();
+    let existing_id = common::ensure_relationship_type(&kg, "works_at")
+        .await
+        .unwrap();
 
     let entity = kg
         .create_entity("Alice", EntityType::Person, &[])
@@ -489,20 +532,21 @@ async fn transactional_fact_insert_resolves_relationship_type_alias() {
 }
 
 #[tokio::test]
-async fn ensure_relationship_type_resolves_alias_to_canonical() {
+async fn test_fixture_resolves_alias_to_canonical() {
     let (_dir, kg) = setup().await;
-    let canonical_id = kg.ensure_relationship_type("studied_at").await.unwrap();
+    let canonical_id = common::ensure_relationship_type(&kg, "studied_at")
+        .await
+        .unwrap();
     kg.insert_relationship_type_alias("test_attended_alias", canonical_id)
         .await
         .unwrap();
 
-    let resolved_id = kg
-        .ensure_relationship_type("test_attended_alias")
+    let resolved_id = common::ensure_relationship_type(&kg, "test_attended_alias")
         .await
         .unwrap();
     assert_eq!(
         resolved_id, canonical_id,
-        "ensure_relationship_type should resolve 'attended' alias to canonical 'studied_at'"
+        "the test fixture should resolve 'attended' alias to canonical 'studied_at'"
     );
     assert_eq!(
         kg.get_relationship_type_id("test_attended_alias")
@@ -514,9 +558,11 @@ async fn ensure_relationship_type_resolves_alias_to_canonical() {
 }
 
 #[tokio::test]
-async fn ensure_relationship_type_creates_new_type_and_self_alias() {
+async fn test_fixture_creates_new_type_and_self_alias() {
     let (_dir, kg) = setup().await;
-    let id = kg.ensure_relationship_type("foo_bar").await.unwrap();
+    let id = common::ensure_relationship_type(&kg, "foo_bar")
+        .await
+        .unwrap();
 
     let name_id = kg.get_relationship_type_id("foo_bar").await.unwrap();
     assert_eq!(

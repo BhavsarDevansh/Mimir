@@ -5,6 +5,8 @@
 //! alias resolution, and idempotency.
 
 use mimir_knowledge::KnowledgeGraph;
+
+mod common;
 use std::path::PathBuf;
 
 async fn setup() -> (tempfile::TempDir, KnowledgeGraph) {
@@ -71,8 +73,12 @@ async fn new_predicates_have_self_aliases() {
 #[tokio::test]
 async fn legacy_verb_aliases_resolve_to_canonical() {
     let (_dir, kg) = setup().await;
-    let studied_at = kg.ensure_relationship_type("studied_at").await.unwrap();
-    let has_partner = kg.ensure_relationship_type("has_partner").await.unwrap();
+    let studied_at = common::ensure_relationship_type(&kg, "studied_at")
+        .await
+        .unwrap();
+    let has_partner = common::ensure_relationship_type(&kg, "has_partner")
+        .await
+        .unwrap();
 
     assert_eq!(
         kg.resolve_relationship_type_alias("attended")

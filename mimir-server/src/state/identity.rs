@@ -18,9 +18,12 @@ pub async fn seed_identity_facts(
     use mimir_knowledge::models::fact::NewFact;
     use mimir_knowledge::models::source::SourceType;
 
-    // Resolve predicate IDs via the cached registry.
-    let has_name_id = kg.ensure_relationship_type("has_name").await?;
-    let pref_name_id = kg.ensure_relationship_type("preferred_name").await?;
+    // Resolve predicate IDs through the closed taxonomy. The seeds are part of
+    // migrations, so this path cannot create runtime vocabulary.
+    let has_name_id = kg.resolve_canonical_relationship_type("has_name").await?;
+    let pref_name_id = kg
+        .resolve_canonical_relationship_type("preferred_name")
+        .await?;
 
     // Targeted existence checks: query only the two relevant predicates.
     let has_name_facts = kg

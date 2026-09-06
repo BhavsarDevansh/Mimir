@@ -109,7 +109,9 @@ async fn insert_allows_unconstrained_predicates() {
     let place = create_entity(&tg.kg, "Paris", EntityType::Place).await;
 
     // `likes` has no seeded constraint rows: any type pair is accepted.
-    let likes_id = tg.kg.ensure_relationship_type("likes").await.unwrap();
+    let likes_id = common::ensure_relationship_type(&tg.kg, "likes")
+        .await
+        .unwrap();
     let fact = tg
         .kg
         .insert_fact(new_fact(person, "likes", Some(place)))
@@ -232,8 +234,12 @@ async fn sensitive_facts_are_constraint_checked() {
 #[tokio::test]
 async fn validate_predicate_rejects_invalid_and_allows_unconstrained() {
     let tg = common::TestGraph::new().await;
-    let born_on = tg.kg.ensure_relationship_type("born_on").await.unwrap();
-    let likes = tg.kg.ensure_relationship_type("likes").await.unwrap();
+    let born_on = common::ensure_relationship_type(&tg.kg, "born_on")
+        .await
+        .unwrap();
+    let likes = common::ensure_relationship_type(&tg.kg, "likes")
+        .await
+        .unwrap();
 
     assert!(
         mimir_knowledge::queries::entity::validate_predicate(

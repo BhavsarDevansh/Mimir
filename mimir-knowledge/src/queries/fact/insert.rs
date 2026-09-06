@@ -408,7 +408,10 @@ mod tests {
             .await
             .unwrap()
             .id;
-        let predicate = kg.ensure_relationship_type("prefers").await.unwrap();
+        let predicate = kg
+            .resolve_canonical_relationship_type("prefers")
+            .await
+            .unwrap();
         let memory_priority_id: i16 =
             sqlx::query_scalar("SELECT id FROM memory_priorities WHERE name = 'Normal'")
                 .fetch_one(kg.pool())
@@ -506,7 +509,10 @@ mod tests {
             .await
             .unwrap()
             .id;
-        let predicate = kg.ensure_relationship_type("has_event").await.unwrap();
+        let predicate = kg
+            .resolve_canonical_relationship_type("has_event")
+            .await
+            .unwrap();
         let memory_priority_id: i16 =
             sqlx::query_scalar("SELECT id FROM memory_priorities WHERE name = 'Normal'")
                 .fetch_one(kg.pool())
@@ -572,7 +578,10 @@ mod tests {
             .await
             .unwrap()
             .id;
-        let predicate = kg.ensure_relationship_type("likes").await.unwrap();
+        let predicate = kg
+            .resolve_canonical_relationship_type("dislikes")
+            .await
+            .unwrap();
         let memory_priority_id: i16 =
             sqlx::query_scalar("SELECT id FROM memory_priorities WHERE name = 'Normal'")
                 .fetch_one(kg.pool())
@@ -594,7 +603,7 @@ mod tests {
 
         let new_fact = NewFact {
             subject_id: subject,
-            relationship_type: "likes".to_string(),
+            relationship_type: "dislikes".to_string(),
             object_id: Some(object),
             object_literal: None,
             valid_from: Some(now),

@@ -730,7 +730,7 @@ async fn semantic_dedup_uses_null_aware_object_identity() {
         candidates[0]["fact_b_id"].as_i64().unwrap(),
     ];
     assert_eq!(pair, [null_fact, other_null_fact].map(i64::from));
-    assert!(!pair.contains(&(empty_fact as i64)));
+    assert!(!pair.contains(&i64::from(empty_fact)));
 }
 
 /// Build a fresh `KnowledgeGraph` driven by a [`MockClock`] so the pending

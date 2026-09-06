@@ -36,6 +36,8 @@ Mimir applies this overlap check in SQLite rather than loading every fact for a 
 
 Empty half-open intervals (`valid_from == valid_until`) are not treated as overlaps, so they cannot supersede an existing active fact.
 
+The implementation-facing schema, audit, forget, and public API details are documented in [`docs/fact-management.md`](../fact-management.md).
+
 ---
 
 ## Confidence

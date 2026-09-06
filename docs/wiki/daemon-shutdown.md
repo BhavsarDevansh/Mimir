@@ -29,6 +29,7 @@ When shutdown is triggered:
 
 - The server stops accepting new HTTP connections.
 - In-flight requests are allowed to finish (within a 30-second drain limit).
+- Connector runners wait on their completion signal, with a five-second abort deadline for stragglers.
 - The SQLite database pool is closed, flushing any pending writes.
 - LLM worker threads are stopped and their HTTP connections closed.
 

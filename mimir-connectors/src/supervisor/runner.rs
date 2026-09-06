@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use tokio::sync::{Mutex, Semaphore, mpsc, watch};
+use tokio::sync::{Mutex, Semaphore, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
@@ -39,6 +39,10 @@ pub(super) struct ConnectorHandle {
     pub(super) trigger_tx: mpsc::Sender<TriggerRequest>,
     /// One-permit semaphore serialising concurrent `trigger_sync` callers.
     pub(super) semaphore: Arc<Semaphore>,
+    /// Completes when the runner task body has returned, even if its
+    /// [`JoinHandle`] has not yet been awaited. `shutdown` waits on this
+    /// signal so runner termination is event-driven rather than polled.
+    pub(super) finished_rx: oneshot::Receiver<()>,
 }
 
 /// Owns one supervised task per active connector instance.
@@ -268,20 +272,32 @@ impl ConnectorSupervisor {
         let (trigger_tx, trigger_rx) = mpsc::channel(TRIGGER_CHANNEL_CAPACITY);
         let semaphore = Arc::new(Semaphore::new(1));
         let (stop_tx, stop_rx) = watch::channel(false);
-        let handle = tokio::spawn(run_connector(
-            // One clone feeds the runner; the other is retained below.
-            Arc::clone(&connector),
-            self.kg.clone(),
-            self.config,
-            RunnerSignals {
-                shutdown: self.shutdown.clone(),
-                stop: stop_rx,
-            },
-            row.id,
-            connector_type,
-            trigger_rx,
-            self.cycle_tasks.clone(),
-        ));
+        let (finished_tx, finished_rx) = oneshot::channel();
+        let runner_connector = Arc::clone(&connector);
+        let runner_config = self.config;
+        let runner_shutdown = self.shutdown.clone();
+        let handle = tokio::spawn({
+            let kg = Arc::clone(&self.kg);
+            let cycle_tasks = self.cycle_tasks.clone();
+            async move {
+                run_connector(
+                    // One clone feeds the runner; the other is retained below.
+                    runner_connector,
+                    kg,
+                    runner_config,
+                    RunnerSignals {
+                        shutdown: runner_shutdown,
+                        stop: stop_rx,
+                    },
+                    row.id,
+                    connector_type,
+                    trigger_rx,
+                    cycle_tasks,
+                )
+                .await;
+                let _ = finished_tx.send(());
+            }
+        });
         self.handles.lock().await.insert(
             row.id,
             ConnectorHandle {
@@ -290,6 +306,7 @@ impl ConnectorSupervisor {
                 connector,
                 trigger_tx,
                 semaphore,
+                finished_rx,
             },
         );
         info!(connector_id = row.id, slug = %row.slug, backend = %row.backend, "spawned connector runner");

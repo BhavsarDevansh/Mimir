@@ -188,7 +188,8 @@ mail-parser = { version = "0.11.5", optional = true }
 keyring = { version = "3.6.3", features = ["apple-native", "windows-native", "async-secret-service", "crypto-rust"], optional = true }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+# `test-util` enables paused Tokio clocks for deterministic shutdown tests.
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "test-util"] }
 tempfile = "3"
 wiremock = "0.6"
 # `url` builds/parses the mock-OAuth-server request forms in the T2 E2E tests

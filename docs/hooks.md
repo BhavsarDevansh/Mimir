@@ -91,11 +91,11 @@ Each hook has a `RetryPolicy { max_attempts, backoff }`. A handler returns `Hook
 - `force_run(hook_id)` — runs a hook immediately with an empty `()` payload, bypassing all gates; errors with `NotRegistered` / `AlreadyRunning`.
 - `pending_depth()` / `pending_depth_for(hook_id)` / `running_count()` / `is_running(hook_id)` / `is_settled_for(hook_id)` — observability; `pending_depth` is surfaced in `GET /status` as `hook_queue_depth`, and `is_settled_for` reads the pending and running state in one settled-state predicate.
 - `start(shutdown_rx)` — the single dispatch loop; runs until the shutdown watch channel fires.
-- `shutdown()` — signals the loop and cancels the in-flight hook run.
+- `shutdown()` — signals the loop and cancels the in-flight hook run; if the dispatch loop was never started, it returns immediately instead of waiting for a loop-exit signal.
 
 ## Testing
 
-- `mimir-core/src/hooks/tests.rs` — unit tests for each queue policy (drop, replace-at-tail with fresh payload, FIFO), key scope, debounce window, idle gating, retry backoff, force-run, and shutdown.
+- `mimir-core/src/hooks/tests.rs` — unit tests for each queue policy (drop, replace-at-tail with fresh payload, FIFO), key scope, debounce window, idle gating, retry backoff, force-run, shutdown with a running dispatch loop, and a paused-clock shutdown without a dispatch loop (paused after database setup).
 - `mimir-server/tests/chat_learning_tests.rs` — server integration tests: non-incognito blocking and streaming turns enqueue the hook and persist facts; incognito turns never enqueue any hook and write no facts.
 - `mimir-server/tests/kb_query_tests.rs` — asserts the `remember` tool is absent from the registry and the OpenAI export.
 

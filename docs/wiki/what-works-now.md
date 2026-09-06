@@ -253,7 +253,7 @@ All client commands talk to the daemon over HTTP except `mimir personality list`
 
 | Feature | Status | Notes & pending work |
 |---------|--------|----------------------|
-| Job queue + scheduler | ✅ Works | SQLite-backed queue with dedup, debounce, cooldown, idle gating; nightly optimization, pending cleanup, and events scan jobs. Memory condensation runs through the hooks engine instead (issue #386), applying the same dedupe/debounce/cooldown/idle-gate rules per hook. |
+| Job queue + scheduler | ✅ Works | SQLite-backed queue with dedup, debounce, cooldown, idle gating; nightly optimization, pending cleanup, and events scan jobs. Memory condensation runs through the hooks engine instead (issue #386), applying the same dedupe/debounce/cooldown/idle-gate rules per hook; hook teardown skips its dispatch-loop wait when the loop never started ([#536](https://github.com/BhavsarDevansh/Mimir/issues/536)). |
 | Resource-limit enforcement | ✅ Works | Per-job timeouts, graceful cancellation (daemon shutdown cancels in-flight runs, recorded as `cancelled`), and best-effort CPU affinity / nice / cgroup v2 memory limits wired from `[knowledge.optimization]` ([#91](https://github.com/BhavsarDevansh/Mimir/issues/91)). |
 
 ### LLM Client & Worker Pool

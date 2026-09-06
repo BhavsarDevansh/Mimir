@@ -17,6 +17,7 @@ use mimir_knowledge::models::preference::{
 use mimir_knowledge::models::source::{ExtractionMethod, SourceType};
 use mimir_knowledge::normalize::{NormalizedFact, Provenance, normalize_and_insert};
 use mimir_knowledge::obsidian::{ObsidianFile, scan_markdown_files};
+use mimir_knowledge::queries::entity::get_exact_name;
 
 /// Fresh KnowledgeGraph in a temp dir.
 async fn fresh_kg() -> (KnowledgeGraph, tempfile::TempDir) {
@@ -615,6 +616,91 @@ type: Person
     assert_eq!(second.counts.entities_new, 0, "{:?}", second.counts);
     assert_eq!(second.counts.facts_new, 0);
     assert_eq!(second.counts.facts_existing, 1);
+}
+
+#[tokio::test]
+async fn import_dry_run_resolves_object_aliases_like_apply() {
+    let (kg, _dir) = fresh_kg().await;
+    kg.create_entity("Alice", EntityType::Person, &["Ally"])
+        .await
+        .unwrap();
+
+    let file = ObsidianFile {
+        relative_path: "Devansh.md".to_string(),
+        content: r#"---
+type: Person
+---
+
+# Devansh
+
+## Relationships
+- has_partner → [[Ally]] (since 2022-01-01)
+"#
+        .to_string(),
+    };
+
+    let dry = kg
+        .import_obsidian(std::slice::from_ref(&file), true)
+        .await
+        .unwrap();
+    assert_eq!(dry.counts.entities_new, 1, "{:?}", dry.counts);
+
+    let applied = kg
+        .import_obsidian(std::slice::from_ref(&file), false)
+        .await
+        .unwrap();
+    assert_eq!(applied.counts.entities_new, 1, "{:?}", applied.counts);
+    assert_eq!(applied.counts.facts_new, 1);
+}
+
+#[tokio::test]
+async fn import_object_cache_does_not_survive_an_entity_rename() {
+    let (kg, _dir) = fresh_kg().await;
+    let devansh = ObsidianFile {
+        relative_path: "Devansh.md".to_string(),
+        content: r#"---
+type: Person
+---
+
+# Devansh
+
+## Relationships
+- has_partner → [[Alice]]
+"#
+        .to_string(),
+    };
+    kg.import_obsidian(std::slice::from_ref(&devansh), false)
+        .await
+        .unwrap();
+    let alice = get_exact_name(kg.pool(), "Alice")
+        .await
+        .unwrap()
+        .expect("Alice was created");
+
+    let rename = ObsidianFile {
+        relative_path: "Alice.md".to_string(),
+        content: format!(
+            "---\nentity_id: {}\ntype: Person\n---\n\n# Alice Smith\n",
+            alice.id
+        ),
+    };
+    let bob = ObsidianFile {
+        relative_path: "Bob.md".to_string(),
+        content: r#"---
+type: Person
+---
+
+# Bob
+
+## Relationships
+- has_sibling → [[Alice]]
+"#
+        .to_string(),
+    };
+
+    let outcome = kg.import_obsidian(&[rename, bob], false).await.unwrap();
+    assert_eq!(outcome.counts.entities_new, 2, "{:?}", outcome.counts);
+    assert_eq!(outcome.counts.facts_new, 1);
 }
 
 #[tokio::test]

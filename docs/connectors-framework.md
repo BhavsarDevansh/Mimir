@@ -16,7 +16,7 @@ Connectors never hold a `sqlx` pool handle. All persistence goes through the [`m
 
 ## Connector row columns (issue #560)
 
-Connector registry reads and row-returning writes share one compile-time `connector_column_list` macro. Every `SELECT` and `RETURNING` projection uses that same source of truth, so adding a `connectors` column only requires the model/schema and the shared projection list to move together. The macro expands into a static SQL string, preserving SQLx's safe-static-SQL guarantee and all bind order/error semantics.
+Connector registry reads and row-returning writes share one compile-time `connector_column_list` macro. Every `SELECT` and `RETURNING` projection uses that same source of truth, so adding a `connectors` column only requires the model/schema and the shared projection list to move together. The macro expands into a static SQL string, preserving SQLx's safe-static-SQL guarantee and all bind order/error semantics without runtime SQL construction or escaping.
 
 ## Shared ingestion boundary (F4 / #181)
 

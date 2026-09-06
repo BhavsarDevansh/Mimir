@@ -526,7 +526,7 @@ mod tests {
          facts_dropped, facts_staged, last_sync_at, last_error, created_at, updated_at";
 
     #[test]
-    fn connector_column_list_matches_model_and_table_contract() {
+    fn connector_column_list_matches_expected_contract() {
         assert_eq!(connector_column_list!(), EXPECTED_CONNECTOR_COLUMNS);
     }
 }

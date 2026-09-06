@@ -5,7 +5,7 @@ use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicU32;
 use std::time::Duration;
 
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 
 use mimir_knowledge::models::entity::ENTITY_TYPES;
 use mimir_knowledge::models::enums::{ConnectorType, RECURRENCE_TYPES};
@@ -82,6 +82,7 @@ impl MockConnector {
             sync_delay: Duration::from_millis(parsed.sync_delay_ms),
             interval: Duration::from_millis(parsed.interval_ms),
             recorder: None,
+            sync_started: None,
             sync_calls: AtomicU32::new(0),
             sync_successes: AtomicU32::new(0),
             buffer: Mutex::new(Vec::new()),
@@ -96,6 +97,15 @@ impl MockConnector {
     /// for chaining; not exposed through the factory/config path.
     pub fn with_recorder(mut self, recorder: Arc<MockSyncRecorder>) -> Self {
         self.recorder = Some(recorder);
+        self
+    }
+
+    /// Attach a shared sync-start notification and configure a fixed delay.
+    /// The notification fires before the delay, allowing deterministic tests
+    /// to observe the in-flight cycle without polling.
+    pub fn with_delayed_sync(mut self, started: Arc<Notify>, delay: Duration) -> Self {
+        self.sync_started = Some(started);
+        self.sync_delay = delay;
         self
     }
 

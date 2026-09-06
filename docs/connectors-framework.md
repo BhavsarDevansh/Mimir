@@ -180,6 +180,8 @@ impl ConnectorRegistry {
 
 `ConnectorSupervisor` owns one supervised tokio task per *active* connector instance and centralises spawn, restart-with-backoff, circuit breaker, startup restore, graceful shutdown, cursor persistence, and durable-state persistence. It is the caller that runs the two-step ingestion model end to end: `health` -> `sync` -> `extract` -> `normalize_and_insert`, then `update_sync_progress_and_durable_state` (the cursor and durable state commit in one transaction), then `Connector::on_cycle_succeeded` so the connector adopts the persisted cursor only after the cycle fully succeeded (issue #314). All status / auth / cursor / durable-state writes go through the `KnowledgeGraph` facade — the supervisor never holds a `sqlx` pool, keeping the `sqlx`-free crate boundary intact.
 
+Graceful supervisor shutdown is event-driven (issue #537): each runner exposes a completion signal that resolves when its task body returns. Shutdown waits on that signal for up to `SHUTDOWN_GRACE`, aborts only runners whose signal has not resolved, and then joins each runner exactly once. The remaining five-second bound is therefore an abort deadline, not a polling cadence.
+
 ### Construction
 
 ```rust

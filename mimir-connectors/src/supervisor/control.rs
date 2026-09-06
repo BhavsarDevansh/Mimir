@@ -137,23 +137,22 @@ impl ConnectorSupervisor {
     /// `CycleRegistry`, which is drained and awaited afterwards, so no cycle
     /// task can outlive `shutdown` even on the abort path.
     pub async fn shutdown(&self) {
-        let handles: Vec<ConnectorHandle> =
+        let mut handles: Vec<ConnectorHandle> =
             self.handles.lock().await.drain().map(|(_, h)| h).collect();
         // Signal every runner to stop (the graceful path: the runner aborts
         // and awaits its in-flight cycle before exiting).
-        for handle in &handles {
+        for handle in &mut handles {
             let _ = handle.stop_tx.send(true);
         }
-        // Await the graceful exits, bounded by the grace period so a
-        // straggler cannot stall daemon shutdown forever. `is_finished()` is
-        // polled rather than awaiting the `JoinHandle` here: the handle is
-        // awaited once below, and a second poll of a completed handle panics.
-        for handle in &handles {
-            let deadline = tokio::time::Instant::now() + SHUTDOWN_GRACE;
-            while !handle.task.is_finished() && tokio::time::Instant::now() < deadline {
-                tokio::time::sleep(Duration::from_millis(10)).await;
+        // Await the runner-exit signals, bounded by the grace period so a
+        // straggler cannot stall daemon shutdown forever. The `JoinHandle` is
+        // not polled here, so it can be awaited exactly once below.
+        let runner_exits = async {
+            for handle in &mut handles {
+                let _ = (&mut handle.finished_rx).await;
             }
-        }
+        };
+        let _ = tokio::time::timeout(SHUTDOWN_GRACE, runner_exits).await;
         // Defensive fallback: abort any runner that did not exit, then await
         // its termination.
         for handle in &handles {

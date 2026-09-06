@@ -67,6 +67,10 @@ impl Connector for MockConnector {
             .as_ref()
             .map(|recorder| recorder.enter(options));
 
+        if let Some(started) = self.sync_started.as_ref() {
+            started.notify_one();
+        }
+
         // Push connectors block inside sync waiting for events; the mock
         // simulates this by sleeping the configured cadence. The supervisor
         // aborts the runner task on shutdown, cancelling the sleep.

@@ -3,7 +3,7 @@ use super::*;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
-use tokio::sync::watch;
+use tokio::sync::{Notify, watch};
 
 use crate::connector::{
     ConnectorAction, ConnectorError, ConnectorMode, HealthStatus, SyncOptions, SyncOutcome,
@@ -989,4 +989,60 @@ async fn shutdown_awaits_an_in_flight_cycle() {
     // Release the gate so the (already cancelled) sync future can unwind
     // cleanly if it is ever resumed.
     gate.notify_one();
+}
+
+/// Regression test for issue #537: shutdown must wait on a runner-exit
+/// signal rather than a 10 ms polling loop. A paused Tokio clock makes the
+/// old sleep visible: after a 5 ms sync completes, advancing only 1 ms is
+/// enough for the signal path, while the old poll would still be sleeping
+/// toward its next 10 ms wake-up.
+#[tokio::test]
+async fn shutdown_wakes_on_runner_exit_signal() {
+    let dir = tempfile::tempdir().unwrap();
+    let kg = Arc::new(
+        KnowledgeGraph::init(&dir.path().join("kg.db"))
+            .await
+            .unwrap(),
+    );
+    let entered = Arc::new(Notify::new());
+    let entered_for_factory = Arc::clone(&entered);
+    let registry = ConnectorRegistry::new();
+    registry
+        .register(
+            ConnectorType::Email,
+            "test".to_string(),
+            FnConnectorFactory::new(move |config, _ctx| {
+                let connector = crate::MockConnector::from_config(config)?
+                    .with_delayed_sync(Arc::clone(&entered_for_factory), Duration::from_millis(5));
+                Ok(Arc::new(connector) as Arc<dyn Connector>)
+            }),
+        )
+        .unwrap();
+    let (_tx, rx) = watch::channel(false);
+    let supervisor = ConnectorSupervisor::new(
+        Arc::new(registry),
+        Arc::clone(&kg),
+        SupervisorConfig::default(),
+        rx,
+    );
+    let row = kg
+        .create_connector(UpsertConnectorInput {
+            connector_type: ConnectorType::Email,
+            slug: "delayed-sync".to_string(),
+            backend: "test".to_string(),
+            display_name: "Delayed Sync".to_string(),
+            config_json: "{}".to_string(),
+            status: None,
+            auth_state: None,
+        })
+        .await
+        .unwrap();
+
+    supervisor.start(row.id).await.unwrap();
+    tokio::time::pause();
+    entered.notified().await;
+    tokio::join!(
+        tokio::time::advance(Duration::from_millis(6)),
+        supervisor.shutdown()
+    );
 }

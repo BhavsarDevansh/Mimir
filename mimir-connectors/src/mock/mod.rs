@@ -52,7 +52,7 @@ use std::time::Duration;
 
 use mimir_knowledge::models::enums::{ConnectorAuthState, ConnectorType};
 use mimir_knowledge::normalize::NormalizedFact;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 
 use crate::connector::{ConnectorMode, HealthStatus};
 use config::{DEFAULT_INTERVAL_MS, DEFAULT_JITTER_MS, default_display_name, default_slug};
@@ -96,6 +96,9 @@ pub struct MockConnector {
     auth_fail: bool,
     cursor: Option<String>,
     sync_delay: Duration,
+    /// Test-only signal fired when a sync call starts, so tests can
+    /// deterministically await the delayed section without polling.
+    sync_started: Option<Arc<Notify>>,
     interval: Duration,
     recorder: Option<Arc<MockSyncRecorder>>,
     sync_calls: AtomicU32,
@@ -138,6 +141,7 @@ impl Default for MockConnector {
             auth_fail: false,
             cursor: None,
             sync_delay: Duration::ZERO,
+            sync_started: None,
             interval: Duration::from_millis(DEFAULT_INTERVAL_MS),
             recorder: None,
             sync_calls: AtomicU32::new(0),

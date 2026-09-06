@@ -6,6 +6,14 @@ use mimir_knowledge::KnowledgeGraph;
 use mimir_knowledge::models::entity::EntityType;
 use mimir_knowledge::models::fact::{Fact, NewFact};
 use mimir_knowledge::models::source::SourceType;
+use mimir_test_support::TestSupportError;
+
+pub async fn ensure_relationship_type(
+    kg: &KnowledgeGraph,
+    name: &str,
+) -> Result<i16, TestSupportError> {
+    mimir_test_support::ensure_relationship_type(kg, name).await
+}
 
 pub async fn create_person(kg: &KnowledgeGraph, name: &str) -> i32 {
     let entity = kg

@@ -622,7 +622,9 @@ async fn test_alias_resolution_uses_db_alias() {
 
     // Seed an alias so "matriculated_at" resolves to the canonical "studied_at".
     // Deliberately use a synonym that is *not* in the deprecated hardcoded map.
-    let studied_at_id = tg.kg.ensure_relationship_type("studied_at").await.unwrap();
+    let studied_at_id = common::ensure_relationship_type(&tg.kg, "studied_at")
+        .await
+        .unwrap();
     tg.kg
         .insert_relationship_type_alias("matriculated_at", studied_at_id)
         .await

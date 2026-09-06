@@ -13,7 +13,9 @@ async fn temporal_fact_at_midpoint() {
     let london = tg.create_place("London").await;
     let paris = tg.create_place("Paris").await;
 
-    let is_in_id = tg.kg.ensure_relationship_type("is_in").await.unwrap();
+    let is_in_id = common::ensure_relationship_type(&tg.kg, "is_in")
+        .await
+        .unwrap();
 
     // Alice lives_in London from Jan 1 to Jun 1 2023
     let mut f1 = NewFact::new(alice, "is_in");
@@ -83,7 +85,9 @@ async fn temporal_no_range_matches_open_end() {
     let bob = tg.create_person("Bob").await;
     let berlin = tg.create_place("Berlin").await;
 
-    let is_in_id = tg.kg.ensure_relationship_type("is_in").await.unwrap();
+    let is_in_id = common::ensure_relationship_type(&tg.kg, "is_in")
+        .await
+        .unwrap();
 
     // Bob lives_in Berlin with no temporal bounds
     let mut f = NewFact::new(bob, "is_in");
@@ -108,7 +112,9 @@ async fn temporal_open_ended_start() {
     let carol = tg.create_person("Carol").await;
     let nyc = tg.create_place("NYC").await;
 
-    let is_in_id = tg.kg.ensure_relationship_type("is_in").await.unwrap();
+    let is_in_id = common::ensure_relationship_type(&tg.kg, "is_in")
+        .await
+        .unwrap();
 
     // Carol lives_in NYC with no valid_from but an open-ended valid_until
     let mut f = NewFact::new(carol, "is_in");

@@ -2,6 +2,8 @@
 
 use chrono::Utc;
 use mimir_knowledge::KnowledgeGraph;
+
+mod common;
 use mimir_knowledge::clock::{Clock, MockClock};
 use mimir_knowledge::models::entity::EntityType;
 use mimir_knowledge::models::fact::NewFact;
@@ -300,7 +302,9 @@ async fn memory_ranking_assigns_highest_priority_bucket() {
 
     // General-only fact. This test intentionally uses a taxonomy-external
     // type to verify bucketing without a deterministic domain fallback.
-    let general_type_id = kg.ensure_relationship_type("test_general").await.unwrap();
+    let general_type_id = common::ensure_relationship_type(&kg, "test_general")
+        .await
+        .unwrap();
     let mut general = NewFact::new(user.id, "test_general");
     general.object_literal = Some("hiking".to_string());
     general.source_type = SourceType::UserEdit;

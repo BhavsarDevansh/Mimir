@@ -232,12 +232,14 @@ async fn strict_resolver_rejects_unknown_predicate() {
 }
 
 #[tokio::test]
-async fn strict_resolver_rejects_auto_created_type() {
+async fn strict_resolver_rejects_non_emitting_fixture_type() {
     let tg = TestGraph::new().await;
 
-    // A connector-style insert auto-creates the type; the strict resolver must
-    // still refuse it because it is not part of the canonical seed.
-    let auto_id = tg.kg.ensure_relationship_type("moved_into").await.unwrap();
+    // A test-only non-emitting fixture stands in for a runtime-created type;
+    // the strict resolver must still refuse it because it is not seed data.
+    let _fixture_id = common::ensure_relationship_type(&tg.kg, "moved_into")
+        .await
+        .unwrap();
     let err = tg
         .kg
         .resolve_canonical_relationship_type("moved_into")
@@ -248,15 +250,8 @@ async fn strict_resolver_rejects_auto_created_type() {
         "error should name the predicate: {err}"
     );
 
-    // The auto-created id is not the canonical set's id for anything.
-    let (count,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM relationship_types WHERE id = ? AND description NOT LIKE 'Auto-created relationship_type: %'",
-    )
-    .bind(auto_id)
-    .fetch_one(tg.kg.pool())
-    .await
-    .unwrap();
-    assert_eq!(count, 0, "auto-created row must not be canonical");
+    // The non-emitting fixture id exists only so the strict resolver can be
+    // shown to reject it; production has no API that creates such a row.
 }
 
 #[tokio::test]
@@ -473,8 +468,33 @@ async fn reconciliation_migration_deletes_unreferenced_auto_created_types() {
 
     // Simulate pre-050 pollution: one auto-created type referenced by a fact
     // and one that is pure pollution.
-    let with_fact = kg.ensure_relationship_type("moved_into").await.unwrap();
-    let without_fact = kg.ensure_relationship_type("wibbles_at").await.unwrap();
+    let create_auto_created_fixture = |name: &'static str| {
+        let name = name.to_string();
+        async move |kg: &KnowledgeGraph| -> Result<i16, sqlx::Error> {
+            let id: i16 = sqlx::query_scalar(
+                "INSERT INTO relationship_types (name, description, node_kind, emit_eligible) \
+                 VALUES (?, ?, 'alias', FALSE) RETURNING id",
+            )
+            .bind(&name)
+            .bind(format!("Auto-created relationship_type: {name}"))
+            .fetch_one(kg.pool())
+            .await?;
+            sqlx::query(
+                "INSERT INTO relationship_type_aliases (alias, relationship_type_id) VALUES (?, ?)",
+            )
+            .bind(&name)
+            .bind(id)
+            .execute(kg.pool())
+            .await?;
+            Ok(id)
+        }
+    };
+    let with_fact = create_auto_created_fixture("moved_into")(&kg)
+        .await
+        .unwrap();
+    let without_fact = create_auto_created_fixture("wibbles_at")(&kg)
+        .await
+        .unwrap();
     let subject = kg
         .create_entity(
             "devansh",

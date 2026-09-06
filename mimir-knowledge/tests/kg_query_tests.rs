@@ -113,7 +113,9 @@ async fn test_kg_query_predicate_filter() {
     tg.kg.insert_fact(f1).await.unwrap();
     tg.kg.insert_fact(f2).await.unwrap();
 
-    let pred_id = tg.kg.ensure_relationship_type("lives_in").await.unwrap();
+    let pred_id = common::ensure_relationship_type(&tg.kg, "lives_in")
+        .await
+        .unwrap();
     let facts = mimir_knowledge::queries::fact::get_facts_by_subject_filtered(
         tg.kg.pool(),
         alice,

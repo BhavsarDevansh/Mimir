@@ -126,7 +126,12 @@ async fn fact_relationship_type_id_lookup() {
     );
 
     let by_predicate = kg
-        .get_facts_by_relationship_type(kg.ensure_relationship_type("works_as").await.unwrap(), 10)
+        .get_facts_by_relationship_type(
+            common::ensure_relationship_type(&kg, "works_as")
+                .await
+                .unwrap(),
+            10,
+        )
         .await
         .unwrap();
     assert!(by_predicate.iter().any(|f| f.id == fact.id));

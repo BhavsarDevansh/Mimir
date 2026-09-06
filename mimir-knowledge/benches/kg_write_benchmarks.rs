@@ -205,7 +205,9 @@ fn bench_dedup_pass(c: &mut Criterion) {
                 // so the measured pass is not gated on insert-pipeline cost.
                 let (kg, dir, ids) = seeded_graph(&rt, 30);
                 rt.block_on(async {
-                    let knows = kg.ensure_relationship_type("knows").await.unwrap();
+                    let knows = mimir_test_support::ensure_relationship_type(&kg, "knows")
+                        .await
+                        .unwrap();
                     let normal: i16 = sqlx::query_scalar(
                         "SELECT id FROM memory_priorities WHERE name = 'Normal'",
                     )
@@ -263,7 +265,9 @@ fn bench_traverse_star_graph(c: &mut Criterion) {
             || {
                 let (kg, dir, ids) = seeded_graph(&rt, 300);
                 rt.block_on(async {
-                    let knows = kg.ensure_relationship_type("knows").await.unwrap();
+                    let knows = mimir_test_support::ensure_relationship_type(&kg, "knows")
+                        .await
+                        .unwrap();
                     let normal: i16 = sqlx::query_scalar(
                         "SELECT id FROM memory_priorities WHERE name = 'Normal'",
                     )

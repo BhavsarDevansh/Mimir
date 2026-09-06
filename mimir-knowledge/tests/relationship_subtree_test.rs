@@ -50,7 +50,9 @@ async fn add_fact(
         parent_fact_ids: Vec::new(),
         category_ids: Vec::new(),
     };
-    let relationship_type_id = tg.kg.ensure_relationship_type(predicate).await.unwrap();
+    let relationship_type_id = common::ensure_relationship_type(&tg.kg, predicate)
+        .await
+        .unwrap();
     let canonical_name = tg.kg.relationship_type_name(relationship_type_id).await;
     let mut new_fact = new_fact;
     new_fact.relationship_type = canonical_name.unwrap_or_else(|| predicate.to_string());
@@ -68,7 +70,9 @@ async fn add_fact(
 
 /// Ensure a relationship type exists and return its id.
 async fn rt(tg: &common::TestGraph, name: &str) -> i16 {
-    tg.kg.ensure_relationship_type(name).await.unwrap()
+    common::ensure_relationship_type(&tg.kg, name)
+        .await
+        .unwrap()
 }
 
 /// Add a hierarchy edge: `child` becomes a descendant of `parent`.

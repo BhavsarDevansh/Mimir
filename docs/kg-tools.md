@@ -138,7 +138,7 @@ Stop conditions: `depth >= max_depth`, `visited.len() >= max_nodes`, or empty fr
 
 ## Targeted Predicate Lookup
 
-`KnowledgeGraph::relationship_type_id(&str)` performs a cached, non-mutating lookup of a relationship type by name, returning `None` if it does not exist (unlike `ensure_relationship_type`, which creates missing rows).
+`KnowledgeGraph::relationship_type_id(&str)` performs a cached, non-mutating lookup of a relationship type by name, returning `None` if it does not exist; there is no public relationship-type creation helper, so missing rows require a migration or governance-approved vocabulary change.
 
 `KnowledgeGraph::get_facts_by_subject_and_predicate(subject_id, relationship_type_id)` returns only facts matching a specific subject–predicate pair, avoiding full-table scans.
 

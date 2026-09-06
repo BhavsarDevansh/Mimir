@@ -7,9 +7,15 @@ use mimir_knowledge::queries;
 
 /// Seed ~10 000 facts into a fresh knowledge graph.
 async fn seed_10k_facts(kg: &KnowledgeGraph) -> (Vec<i32>, Vec<i32>) {
-    let _is_in_id = kg.ensure_relationship_type("is_in").await.unwrap();
-    let _visited_id = kg.ensure_relationship_type("visited").await.unwrap();
-    let _knows_id = kg.ensure_relationship_type("knows").await.unwrap();
+    let _is_in_id = mimir_test_support::ensure_relationship_type(kg, "is_in")
+        .await
+        .unwrap();
+    let _visited_id = mimir_test_support::ensure_relationship_type(kg, "visited")
+        .await
+        .unwrap();
+    let _knows_id = mimir_test_support::ensure_relationship_type(kg, "knows")
+        .await
+        .unwrap();
 
     // Create 500 persons and 500 places (1000 entities total)
     let mut person_ids = Vec::with_capacity(500);

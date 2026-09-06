@@ -4,6 +4,8 @@ use mimir_knowledge::KnowledgeGraph;
 use mimir_knowledge::models::entity::EntityType;
 use mimir_knowledge::queries::entity::MatchKind;
 
+mod common;
+
 // ---------------------------------------------------------------------------
 // Entity CRUD roundtrip
 // ---------------------------------------------------------------------------
@@ -190,7 +192,9 @@ async fn test_predicate_validation() {
     mimir_knowledge::queries::entity::validate_predicate(
         kg.pool(),
         EntityType::Person,
-        kg.ensure_relationship_type("born_on").await.unwrap(),
+        common::ensure_relationship_type(&kg, "born_on")
+            .await
+            .unwrap(),
         EntityType::DateTime,
     )
     .await
@@ -200,7 +204,9 @@ async fn test_predicate_validation() {
     mimir_knowledge::queries::entity::validate_predicate(
         kg.pool(),
         EntityType::Organization,
-        kg.ensure_relationship_type("located_in").await.unwrap(),
+        common::ensure_relationship_type(&kg, "located_in")
+            .await
+            .unwrap(),
         EntityType::Place,
     )
     .await
@@ -210,7 +216,9 @@ async fn test_predicate_validation() {
     let result = mimir_knowledge::queries::entity::validate_predicate(
         kg.pool(),
         EntityType::Place,
-        kg.ensure_relationship_type("born_on").await.unwrap(),
+        common::ensure_relationship_type(&kg, "born_on")
+            .await
+            .unwrap(),
         EntityType::Person,
     )
     .await;

@@ -20,6 +20,8 @@ pub enum TestSupportError {
     Sqlx(#[from] sqlx::Error),
     #[error("Template database copy failed: {0}")]
     Copy(#[from] std::io::Error),
+    #[error("Test fixture failed: {0}")]
+    Fixture(String),
 }
 
 /// Copy the pre-migrated schema template to a destination path.
@@ -32,6 +34,47 @@ pub async fn prepare_from_template(db_path: &Path) -> Result<(), TestSupportErro
         .await
         .map_err(TestSupportError::Copy)?;
     Ok(())
+}
+
+/// Resolve a normalized relationship type name to a test fixture id.
+///
+/// Existing aliases resolve to their canonical id; an unknown name creates a
+/// non-emitting fixture row in the same transaction as its self-alias.
+pub async fn ensure_relationship_type(
+    knowledge_graph: &KnowledgeGraph,
+    name: &str,
+) -> Result<i16, TestSupportError> {
+    let normalized = name.trim();
+    if normalized.is_empty() {
+        return Err(TestSupportError::Fixture(
+            "relationship type name cannot be empty".to_string(),
+        ));
+    }
+
+    if let Some(id) = knowledge_graph.get_relationship_type_id(normalized).await? {
+        return Ok(id);
+    }
+
+    let mut tx = knowledge_graph.pool().begin().await?;
+    let id: i16 = sqlx::query_scalar(
+        "INSERT INTO relationship_types (name, description, node_kind, emit_eligible) \
+         VALUES (?, ?, 'alias', FALSE) \
+         ON CONFLICT (name) DO UPDATE SET name = relationship_types.name RETURNING id",
+    )
+    .bind(normalized)
+    .bind(format!("Test fixture relationship type: {normalized}"))
+    .fetch_one(&mut *tx)
+    .await?;
+    sqlx::query(
+        "INSERT OR IGNORE INTO relationship_type_aliases (alias, relationship_type_id) \
+         VALUES (?, ?)",
+    )
+    .bind(normalized)
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(id)
 }
 
 /// Return the process-local path to the pre-migrated SQLite schema template.
@@ -135,5 +178,26 @@ mod tests {
         let second = crate::template_path().await.unwrap();
 
         assert_eq!(first, second);
+    }
+
+    #[tokio::test]
+    async fn ensure_relationship_type_creates_and_reuses_fixture() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("knowledge.db");
+        let kg = KnowledgeGraph::init(&db_path).await.unwrap();
+
+        let first = crate::ensure_relationship_type(&kg, "fixture_relationship")
+            .await
+            .unwrap();
+        let second = crate::ensure_relationship_type(&kg, "fixture_relationship")
+            .await
+            .unwrap();
+
+        assert_eq!(first, second);
+        assert!(
+            kg.resolve_canonical_relationship_type("fixture_relationship")
+                .await
+                .is_err()
+        );
     }
 }

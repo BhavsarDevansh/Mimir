@@ -210,9 +210,7 @@ async fn test_kb_query_returns_facts() {
         )
         .await
         .unwrap();
-    let pred_id = state
-        .knowledge_graph
-        .ensure_relationship_type("works_at")
+    let pred_id = mimir_test_support::ensure_relationship_type(&state.knowledge_graph, "works_at")
         .await
         .unwrap();
     let _fact = mimir_knowledge::queries::fact::insert_fact(
@@ -273,9 +271,7 @@ async fn test_kb_show_returns_fact_detail() {
         )
         .await
         .unwrap();
-    let pred_id = state
-        .knowledge_graph
-        .ensure_relationship_type("likes")
+    let pred_id = mimir_test_support::ensure_relationship_type(&state.knowledge_graph, "likes")
         .await
         .unwrap();
     let fact = mimir_knowledge::queries::fact::insert_fact(
@@ -337,9 +333,7 @@ async fn test_kb_show_returns_content_update_audit_entry() {
         )
         .await
         .unwrap();
-    let pred_id = state
-        .knowledge_graph
-        .ensure_relationship_type("likes")
+    let pred_id = mimir_test_support::ensure_relationship_type(&state.knowledge_graph, "likes")
         .await
         .unwrap();
     let fact = mimir_knowledge::queries::fact::insert_fact(
@@ -431,9 +425,7 @@ async fn test_kb_browse_returns_edges() {
         )
         .await
         .unwrap();
-    let pred_id = state
-        .knowledge_graph
-        .ensure_relationship_type("works_at")
+    let pred_id = mimir_test_support::ensure_relationship_type(&state.knowledge_graph, "works_at")
         .await
         .unwrap();
     let _fact = mimir_knowledge::queries::fact::insert_fact(
@@ -494,9 +486,7 @@ async fn test_kb_profile_returns_groups() {
         )
         .await
         .unwrap();
-    let pred_id = state
-        .knowledge_graph
-        .ensure_relationship_type("enjoys")
+    let pred_id = mimir_test_support::ensure_relationship_type(&state.knowledge_graph, "enjoys")
         .await
         .unwrap();
     let _fact = mimir_knowledge::queries::fact::insert_fact(
@@ -557,9 +547,7 @@ async fn test_kb_audit_returns_entries() {
         )
         .await
         .unwrap();
-    let pred_id = state
-        .knowledge_graph
-        .ensure_relationship_type("lives_in")
+    let pred_id = mimir_test_support::ensure_relationship_type(&state.knowledge_graph, "lives_in")
         .await
         .unwrap();
     let _fact = mimir_knowledge::queries::fact::insert_fact(
@@ -638,9 +626,7 @@ async fn test_kb_audit_and_show_render_same_changed_by_casing() {
         )
         .await
         .unwrap();
-    let pred_id = state
-        .knowledge_graph
-        .ensure_relationship_type("likes")
+    let pred_id = mimir_test_support::ensure_relationship_type(&state.knowledge_graph, "likes")
         .await
         .unwrap();
     let fact = mimir_knowledge::queries::fact::insert_fact(
@@ -747,9 +733,7 @@ async fn test_kb_forget_restore_trash_roundtrip() {
         )
         .await
         .unwrap();
-    let pred_id = state
-        .knowledge_graph
-        .ensure_relationship_type("has")
+    let pred_id = mimir_test_support::ensure_relationship_type(&state.knowledge_graph, "has")
         .await
         .unwrap();
     let fact = mimir_knowledge::queries::fact::insert_fact(

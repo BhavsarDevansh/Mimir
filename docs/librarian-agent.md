@@ -61,7 +61,7 @@ KG entities/facts + audit log
 
 `build_extraction_prompt` composes the Librarian's system prompt from:
 
-1. **KG-focused base** (`build_base_prompt`) — extraction rules, the DB-driven Categorisation Guide, predicate standards, list splitting, within-output deduplication, and the output contract. The guide renders the complete category tree with indentation so every seeded or user-added category remains selectable and deeper sub-categories cannot drift out of the prompt. Shared with the simple `extract_facts` path.
+1. **KG-focused base** (`build_base_prompt`) — extraction rules, the DB-driven Categorisation Guide, DB-derived predicate standards, list splitting, within-output deduplication, and the output contract. The guide renders the complete category tree with indentation so every seeded or user-added category remains selectable and deeper sub-categories cannot drift out of the prompt. The predicate standards are likewise rendered from the taxonomy's emit-eligible leaves (name plus DB description), so prompt and `remember` tool schema cannot drift apart (#598). Shared with the simple `extract_facts` path.
 2. **Core-facts block** — the same `Personality::CORE_FACTS_HEADER` plus condensed memory the core agent injects, emitted only when non-empty. The user's identity (canonical name, entity details) is read from this block by the LLM, exactly as the core agent resolves identity — no separate identity parameter is passed (#139).
 3. **Recent conversation** — the supplied messages rendered as labelled lines (`[User]: ...` / `[Assistant]: ...`) under `## Recent conversation`.
 4. **Source discipline** — extract facts ONLY from `[User]` messages; never from `[Assistant]` messages (the LLM's own prior output to the user).

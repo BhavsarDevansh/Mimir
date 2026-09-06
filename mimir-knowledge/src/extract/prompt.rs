@@ -4,7 +4,9 @@ use mimir_core::conversation::ConversationMessage;
 use mimir_core::personality::Personality;
 
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 
+use crate::graph::EmitEligiblePredicate;
 use crate::models::category::Category;
 use crate::{KnowledgeError, KnowledgeGraph};
 
@@ -63,18 +65,90 @@ async fn build_category_guide(kg: &KnowledgeGraph) -> Result<String, KnowledgeEr
     Ok(guide)
 }
 
+/// Role statement for the KG-focused extraction prompts.
+const EXTRACTION_ROLE: &str = "You are a fact extractor. Read the user \
+message and emit structured facts via the 'remember' tool.";
+
+/// KG-focused extraction rules, independent of any per-call context.
+const EXTRACTION_RULES: &str = "### Rules\n\
+    - Classify each fact as Explicit, Casual, or Correction.\n\
+    - For Corrections, set correction_scope to 'always' or an ISO-8601 datetime.\n\
+    - Flag health, financial, relationship, religious, political, or legal facts as is_sensitive=true. Mimir will validate your assessment in Rust.\n\
+    - Subject and object types must be one of: Person, Place, Event, Object, Concept, Organization, Activity, DateTime.\n\
+    - Assign 1-3 valid category IDs from the guide below to each fact. Use the MOST specific sub-category available.\n\
+    - Emit one fact per list item.";
+
+/// Duplicate-suppression contract, kept behavioural (no example predicates)
+/// so it cannot drift from the taxonomy.
+const DEDUPLICATION_RULES: &str = "### Deduplication\n\
+    Before emitting a fact, ask yourself: 'Have I already emitted a fact \
+    with the same subject and the same meaning?' If yes, do not emit the \
+    duplicate — emit only the fact that carries genuinely new information.";
+
+/// Output contract for every extraction prompt.
+const OUTPUT_CONTRACT: &str = "### Output\n\
+    Emit ONLY via the 'remember' tool. Do not output free text.";
+
+/// Render the DB-derived predicate standards section.
+///
+/// The closed taxonomy in `relationship_types` is the single source of truth:
+/// the prompt must never carry a second hand-maintained copy of the
+/// vocabulary, because drift between prompt and tool schema silently changes
+/// what the LLM is told to emit (issue #598).
+fn build_predicate_standards(predicates: &[EmitEligiblePredicate]) -> String {
+    let mut standards = String::from(
+        "### Predicate standards (critical)\n\
+         Use ONLY the controlled predicates below for relationship_type. \
+         Do NOT invent synonyms — an unrecognised predicate is staged for \
+         review and never inserted.\n",
+    );
+    let mut current_root: Option<&str> = None;
+    for predicate in predicates {
+        if current_root != Some(predicate.root_name.as_str()) {
+            current_root = Some(&predicate.root_name);
+            let _ = writeln!(standards, "\n- {}", capitalise(&predicate.root_name));
+        }
+        if predicate.guidance.is_empty() {
+            let _ = writeln!(standards, "  * {}", predicate.name);
+        } else {
+            let _ = writeln!(standards, "  * {} — {}", predicate.name, predicate.guidance);
+        }
+    }
+    standards
+}
+
+/// Uppercase the first character of a taxonomy label; an empty label renders
+/// as `General` so orphaned leaves still group under a heading.
+fn capitalise(name: &str) -> String {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::from("General"),
+    }
+}
+
+/// Assemble the base prompt from its readable sections.
+fn render_base_prompt(guide: &str, predicates: &[EmitEligiblePredicate]) -> String {
+    format!(
+        "{EXTRACTION_ROLE}\n\n{EXTRACTION_RULES}\n{guide}\n{}{DEDUPLICATION_RULES}\n{OUTPUT_CONTRACT}",
+        build_predicate_standards(predicates)
+    )
+}
+
 /// Build the KG-focused extraction rules, category guide, and output contract.
+///
+/// Every section is rendered from code or the database; only the taxonomy
+/// leaves (with their DB descriptions) drive the predicate standards, keeping
+/// the prompt in lockstep with the `remember` tool schema.
 ///
 /// Shared by the simple [`extract_facts`] path (no contextual inputs) and the
 /// rich [`build_extraction_prompt`] (which layers the core-facts block and
 /// recent conversation on top).
 pub(super) async fn build_base_prompt(kg: &KnowledgeGraph) -> Result<String, KnowledgeError> {
     let guide = build_category_guide(kg).await?;
+    let predicates = kg.list_emit_eligible_relationship_types().await?;
 
-    Ok(format!(
-        "You are a fact extractor. Read the user message and emit structured facts via the 'remember' tool.\n\n### Rules\n- Classify each fact as Explicit, Casual, or Correction.\n- For Corrections, set correction_scope to 'always' or an ISO-8601 datetime.\n- Flag health, financial, relationship, religious, political, or legal facts as is_sensitive=true. Mimir will validate your assessment in Rust.\n- Subject and object types must be one of: Person, Place, Event, Object, Concept, Organization, Activity, DateTime.\n- Assign 1-3 valid category IDs from the guide below to each fact. Use the MOST specific sub-category available.\n- Emit one fact per list item.\n{}\n### Predicate standards (critical)\nUse the EXACT predicate name below for the matching scenario. Do NOT invent synonyms.\n- Education\n  * Where someone studied   → studied_at (NOT 'attended')\n  * What someone studied    → studied\n  * Degree completed        → completed_degree\n  * Degree status           → educational_status\n- Employment\n  * Employer                → works_at\n  * Job title               → job_title\n  * Profession              → works_as\n- Residence\n  * Current city/country    → resides_in\n  * Previous city           → resides_in (with valid_until)\n- Personal\n  * Hobby (one per fact)    → hobby (NOT 'hobbies')\n  * Favourite thing         → favourite_{{thing}}\n  * Name                    → has_name\n  * Preferred name          → preferred_name\n  * Pet ownership           → has_pets\n- Family\n  * Sibling                 → has_sibling\n  * Partner                 → has_partner\n  * Parent                  → has_parent\n  * Child                   → has_child\n### Deduplication\nBefore emitting a fact, ask yourself: 'Have I already emitted a fact with the same subject and the same meaning?' If yes, do not emit the duplicate — instead strengthen the confidence by marking it Explicit.\nExample: If you already emitted studied_at='University of Auckland', do NOT also emit attended='University of Auckland'.\n### Output\nEmit ONLY via the 'remember' tool. Do not output free text.",
-        guide
-    ))
+    Ok(render_base_prompt(&guide, &predicates))
 }
 
 // ---------------------------------------------------------------------------

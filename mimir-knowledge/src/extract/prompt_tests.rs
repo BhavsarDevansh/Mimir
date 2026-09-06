@@ -1,5 +1,6 @@
 use super::*;
 
+use crate::extract::remember_tool_schema;
 use crate::models::category::NewCategory;
 use mimir_core::conversation::{ConversationMessage, MessageRole};
 
@@ -231,6 +232,79 @@ async fn prompt_has_no_identity_line() {
 
     assert!(!prompt.contains("User identity:"));
     assert!(!prompt.contains("entity id"));
+}
+
+// --- Predicate standards derived from the closed taxonomy (#598) ---
+
+#[tokio::test]
+async fn prompt_predicate_standards_are_derived_from_taxonomy() {
+    let (kg, _dir) = fresh_kg().await;
+    sqlx::query(
+        "INSERT INTO relationship_types (name, description, node_kind, emit_eligible, depth) \
+         VALUES ('taxonomy_probe_predicate', 'Subject has a taxonomy probe', 'leaf', TRUE, 1)",
+    )
+    .execute(kg.pool())
+    .await
+    .unwrap();
+
+    let prompt = build_base_prompt(&kg).await.unwrap();
+
+    assert!(prompt.contains("  * taxonomy_probe_predicate — Subject has a taxonomy probe"));
+    // The hand-maintained scenario list is gone, so its drift-prone
+    // vocabulary no longer lives in the prompt.
+    assert!(!prompt.contains("favourite_"));
+    assert!(!prompt.contains("(NOT 'attended')"));
+}
+
+#[tokio::test]
+async fn prompt_omits_non_emit_eligible_predicates() {
+    let (kg, _dir) = fresh_kg().await;
+    let prompt = build_base_prompt(&kg).await.unwrap();
+
+    // Taxonomy roots are query-only and must not be offered as predicates.
+    assert!(!prompt.contains("  * preference"));
+    assert!(!prompt.contains("  * relationship"));
+    // Seeded controlled leaves are listed with their DB guidance.
+    assert!(prompt.contains("  * resides_in"));
+}
+
+#[tokio::test]
+async fn prompt_predicate_guidance_matches_tool_schema_enum() {
+    let (kg, _dir) = fresh_kg().await;
+    let prompt = build_base_prompt(&kg).await.unwrap();
+    let names = kg
+        .list_emit_eligible_relationship_type_names()
+        .await
+        .unwrap();
+    let schema = remember_tool_schema(&names);
+    let enum_values = schema["function"]["parameters"]["properties"]["facts"]["items"]
+        ["properties"]["relationship_type"]["enum"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+
+    let standards = prompt
+        .split("### Predicate standards")
+        .nth(1)
+        .expect("prompt carries predicate standards")
+        .split("\n### ")
+        .next()
+        .unwrap();
+
+    // Every schema enum value is presented as a controlled predicate.
+    for name in &enum_values {
+        assert!(standards.contains(&format!("  * {name}")));
+    }
+    // Every predicate presented in the prompt is in the tool schema enum.
+    for line in standards.lines().filter(|line| line.starts_with("  * ")) {
+        let name = line[4..].split(" — ").next().unwrap();
+        assert!(
+            enum_values.iter().any(|value| value == name),
+            "prompt predicate {name} is not in the tool schema enum"
+        );
+    }
 }
 
 #[test]

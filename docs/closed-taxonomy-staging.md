@@ -24,4 +24,4 @@ Typed entity frames are the intended home for domain richness. For example, a ho
 - Email LLM extraction owns durable staging of unrecognized output.
 - `GET /kb/staged` and `mimir kb staged` provide human governance for staging review.
 - Connector status surfaces accepted, dropped, and staged counts.
-- Extraction schemas and prompts read the same DB taxonomy rather than duplicating leaf lists in prompts. The remaining static `CANONICAL_PREDICATES` list is a seed/registration pin for tests and deterministic connectors, not the runtime LLM contract.
+- Extraction schemas and prompts read the same DB taxonomy rather than duplicating leaf lists in prompts. The prompt's predicate standards are rendered directly from the emit-eligible leaves with their DB guidance, and a test pins the prompt to the `remember` tool schema enum in both directions (#598). The remaining static `CANONICAL_PREDICATES` list is a seed/registration pin for tests and deterministic connectors, not the runtime LLM contract.

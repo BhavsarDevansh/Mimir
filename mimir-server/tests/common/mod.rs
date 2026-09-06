@@ -103,8 +103,11 @@ pub async fn test_state_with_config(
     let tool_registry = mimir_core::tools::ToolRegistry::with_builtins();
 
     let kg_db_path = temp.path().join("knowledge.db");
+    mimir_test_support::prepare_from_template(&kg_db_path)
+        .await
+        .unwrap();
     let knowledge_graph = Arc::new(
-        mimir_test_support::init_from_template(&kg_db_path)
+        mimir_knowledge::KnowledgeGraph::init(&kg_db_path)
             .await
             .unwrap(),
     );

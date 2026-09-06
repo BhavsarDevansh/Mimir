@@ -2,7 +2,7 @@
 
 ## Implementation
 
-`mimir-test-support` is a development-only workspace crate that owns one pre-migrated SQLite template per test binary. On first use it runs the real knowledge-graph migrations against a temporary source database, atomically writes a clean schema-only database with `VACUUM INTO`, closes the source connection, and then keeps the template path in an asynchronous once-cell guarded by a mutex. `init_from_template` copies that template to the requested destination and opens it with the production `KnowledgeGraph::init` path.
+`mimir-test-support` is a development-only workspace crate that owns one pre-migrated SQLite template per test binary. On first use it runs the real knowledge-graph migrations against a temporary source database, atomically writes a clean schema-only database with `VACUUM INTO`, closes the source connection, and then keeps the template path in an asynchronous once-cell guarded by a mutex. `prepare_from_template` copies that template and creates the destination parent, while each calling crate opens it with its own `KnowledgeGraph::init` dependency.
 
 ## Rationale
 

@@ -32,9 +32,8 @@ tempfile = { version = "3", optional = true }
 test-benchmark = ["dep:tempfile"]
 
 [dev-dependencies]
-mimir-test-support = { path = "../mimir-test-support" }
-
 mimir-core = { path = "../mimir-core", features = ["mock-llm"] }
+mimir-test-support = { path = "../mimir-test-support" }
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 criterion = { version = "0.8.2", features = ["async_tokio"] }

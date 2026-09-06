@@ -96,9 +96,11 @@ fn bench_schema_init_from_template(c: &mut Criterion) {
             || tempfile::tempdir().unwrap(),
             |dir| {
                 rt.block_on(async {
-                    let kg = mimir_test_support::init_from_template(&dir.path().join("kg.db"))
+                    let db_path = dir.path().join("kg.db");
+                    mimir_test_support::prepare_from_template(&db_path)
                         .await
                         .unwrap();
+                    let kg = KnowledgeGraph::init(&db_path).await.unwrap();
                     std::hint::black_box(kg.pool());
                 });
             },

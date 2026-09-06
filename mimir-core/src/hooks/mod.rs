@@ -447,13 +447,16 @@ impl HookEngine {
     /// tears down the runtime (a detached loop could still be finalising the
     /// run's DB record when the pool closes).
     pub async fn shutdown(&self) {
+        // Register the exit waiter *before* signalling: the dispatch loop
+        // calls `notify_waiters()` as soon as it observes the signal, and a
+        // `Notified` future created after that call would miss the wake-up
+        // and sit out the full timeout. `notify_waiters()` notifications are
+        // delivered to futures created before the call, so creating the
+        // future up front closes the race. The future is dropped when the
+        // loop was never started, leaving no wake-up to await.
+        let exited = self.inner.dispatch_exited.notified();
         let _ = self.inner.shutdown_tx.send(true);
         if self.inner.started.load(Ordering::Acquire) {
-            // Register the exit waiter *before* awaiting: the dispatch loop
-            // calls `notify_waiters()` as soon as it observes the signal, and
-            // a `Notified` future created after that call would miss the
-            // wake-up and sit out the full timeout.
-            let exited = self.inner.dispatch_exited.notified();
             {
                 let running = self.inner.running.lock().await;
                 for hook_id in running.keys() {

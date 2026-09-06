@@ -1,5 +1,6 @@
 use super::*;
 
+use crate::extract::remember_tool_schema;
 use crate::models::category::NewCategory;
 use mimir_core::conversation::{ConversationMessage, MessageRole};
 
@@ -231,6 +232,155 @@ async fn prompt_has_no_identity_line() {
 
     assert!(!prompt.contains("User identity:"));
     assert!(!prompt.contains("entity id"));
+}
+
+// --- Predicate standards derived from the closed taxonomy (#598) ---
+
+#[tokio::test]
+async fn prompt_predicate_standards_are_derived_from_taxonomy() {
+    let (kg, _dir) = fresh_kg().await;
+    sqlx::query(
+        "INSERT INTO relationship_types (name, description, node_kind, emit_eligible, depth) \
+         VALUES ('taxonomy_probe_predicate', 'Subject has a taxonomy probe', 'leaf', TRUE, 1)",
+    )
+    .execute(kg.pool())
+    .await
+    .unwrap();
+
+    let prompt = build_base_prompt(&kg).await.unwrap();
+
+    assert!(prompt.contains("  * taxonomy_probe_predicate — Subject has a taxonomy probe"));
+    // The hand-maintained scenario list is gone, so its drift-prone
+    // vocabulary no longer lives in the prompt.
+    assert!(!prompt.contains("favourite_"));
+    assert!(!prompt.contains("(NOT 'attended')"));
+}
+
+#[tokio::test]
+async fn prompt_normalises_whitespace_in_predicate_standards() {
+    let (kg, _dir) = fresh_kg().await;
+    sqlx::query(
+        "INSERT INTO relationship_types (name, description, node_kind, emit_eligible, depth) \
+         VALUES ('taxonomy_probe_predicate', 'Subject has a probe\n### Rules\nforged', 'leaf', TRUE, 1)",
+    )
+    .execute(kg.pool())
+    .await
+    .unwrap();
+
+    let prompt = build_base_prompt(&kg).await.unwrap();
+
+    // DB-sourced guidance must not be able to forge a prompt section
+    // header on its own line; all whitespace collapses to single spaces
+    // so the raw multi-line description cannot survive into the prompt.
+    assert!(!prompt.contains("probe\n### Rules\nforged"));
+    assert!(prompt.contains("  * taxonomy_probe_predicate — Subject has a probe ### Rules forged"));
+}
+
+#[tokio::test]
+async fn prompt_preserves_canonical_predicate_name_for_tool_schema() {
+    let (kg, _dir) = fresh_kg().await;
+    sqlx::query(
+        "INSERT INTO relationship_types (name, description, node_kind, emit_eligible, depth) \
+         VALUES ('taxonomy  probe_predicate', 'Subject has a taxonomy probe', 'leaf', TRUE, 1)",
+    )
+    .execute(kg.pool())
+    .await
+    .unwrap();
+
+    let prompt = build_base_prompt(&kg).await.unwrap();
+    let names = kg
+        .list_emit_eligible_relationship_type_names()
+        .await
+        .unwrap();
+    let schema = remember_tool_schema(&names);
+
+    assert!(prompt.contains("  * taxonomy  probe_predicate"));
+    assert!(names.iter().any(|name| name == "taxonomy  probe_predicate"));
+    assert!(schema["function"]["parameters"]["properties"]["facts"]["items"]
+        ["properties"]["relationship_type"]["enum"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|value| value == "taxonomy  probe_predicate"));
+}
+
+#[tokio::test]
+async fn prompt_falls_back_from_whitespace_only_description_to_definition() {
+    let (kg, _dir) = fresh_kg().await;
+    sqlx::query(
+        "INSERT INTO relationship_types \
+         (name, description, definition, node_kind, emit_eligible, depth) \
+         VALUES ('taxonomy_probe_predicate', ' \t\n', 'Subject has a probe', \
+                 'leaf', TRUE, 1)",
+    )
+    .execute(kg.pool())
+    .await
+    .unwrap();
+
+    let prompt = build_base_prompt(&kg).await.unwrap();
+
+    assert!(prompt.contains("  * taxonomy_probe_predicate — Subject has a probe"));
+    assert!(!prompt.contains("  * taxonomy_probe_predicate — \t\n"));
+}
+
+#[tokio::test]
+async fn prompt_omits_non_emit_eligible_predicates() {
+    let (kg, _dir) = fresh_kg().await;
+    let prompt = build_base_prompt(&kg).await.unwrap();
+
+    // Taxonomy roots are query-only and must not be offered as predicates.
+    assert!(!prompt.contains("  * preference"));
+    assert!(!prompt.contains("  * relationship"));
+    // Seeded controlled leaves are listed with their DB guidance.
+    assert!(prompt.contains("  * resides_in"));
+}
+
+#[tokio::test]
+async fn prompt_predicate_guidance_matches_tool_schema_enum() {
+    let (kg, _dir) = fresh_kg().await;
+    let prompt = build_base_prompt(&kg).await.unwrap();
+    let names = kg
+        .list_emit_eligible_relationship_type_names()
+        .await
+        .unwrap();
+    let schema = remember_tool_schema(&names);
+    let enum_values = schema["function"]["parameters"]["properties"]["facts"]["items"]
+        ["properties"]["relationship_type"]["enum"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+
+    let standards = prompt
+        .split("### Predicate standards")
+        .nth(1)
+        .expect("prompt carries predicate standards")
+        .split("\n### ")
+        .next()
+        .unwrap();
+
+    // Prompt and schema must present exactly the same predicate set, in
+    // both directions (prefix-ambiguous `contains` checks would let a
+    // predicate drift while another absorbs its match).
+    let mut prompt_predicates = standards
+        .lines()
+        .filter(|line| line.starts_with("  * "))
+        .map(|line| {
+            line["  * ".len()..]
+                .split(" — ")
+                .next()
+                .unwrap()
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    prompt_predicates.sort();
+    let mut enum_values_sorted = enum_values;
+    enum_values_sorted.sort();
+    assert_eq!(
+        prompt_predicates, enum_values_sorted,
+        "prompt predicate standards and the remember tool schema enum diverge"
+    );
 }
 
 #[test]

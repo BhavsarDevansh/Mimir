@@ -6,6 +6,18 @@ use serde::{Deserialize, Serialize};
 use crate::KnowledgeError;
 use crate::graph::KnowledgeGraph;
 
+/// An emit-eligible taxonomy leaf with the prompt-facing guidance text.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EmitEligiblePredicate {
+    /// Canonical predicate name, as used by the `remember` tool schema enum.
+    pub name: String,
+    /// Name of the taxonomy root this leaf hangs from (empty when orphaned).
+    pub root_name: String,
+    /// Human-readable meaning, preferring the hand-written `description`
+    /// and falling back to the closed-taxonomy `definition`.
+    pub guidance: String,
+}
+
 /// A durable record for an LLM-emitted fact that did not resolve to a
 /// controlled relationship leaf.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, sqlx::FromRow)]
@@ -31,6 +43,42 @@ pub struct UnrecognizedFactStage {
 }
 
 impl KnowledgeGraph {
+    /// List emit-eligible leaves with the text needed to render prompt
+    /// guidance.
+    ///
+    /// The extraction tool schema and the extraction prompt both use this
+    /// list, so a taxonomy migration or governance update becomes the single
+    /// source of truth for the emitted enum and the prompt's predicate
+    /// standards (issue #598).
+    pub async fn list_emit_eligible_relationship_types(
+        &self,
+    ) -> Result<Vec<EmitEligiblePredicate>, KnowledgeError> {
+        let rows: Vec<(String, String, String, String)> = sqlx::query_as(
+            "SELECT t.name, COALESCE(root.name, ''), \
+                    t.description, t.definition \
+             FROM relationship_types t \
+             LEFT JOIN relationship_types root ON root.id = t.parent_id \
+             WHERE t.emit_eligible = TRUE \
+             ORDER BY COALESCE(root.name, ''), t.name",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(
+                |(name, root_name, description, definition)| EmitEligiblePredicate {
+                    name,
+                    root_name,
+                    guidance: if description.trim().is_empty() {
+                        definition
+                    } else {
+                        description
+                    },
+                },
+            )
+            .collect())
+    }
+
     /// List canonical leaf names eligible for LLM fact emission.
     ///
     /// The extraction tool schema uses this list directly, so a taxonomy
@@ -39,12 +87,12 @@ impl KnowledgeGraph {
     pub async fn list_emit_eligible_relationship_type_names(
         &self,
     ) -> Result<Vec<String>, KnowledgeError> {
-        let rows: Vec<(String,)> = sqlx::query_as(
-            "SELECT name FROM relationship_types WHERE emit_eligible = TRUE ORDER BY name",
-        )
-        .fetch_all(&self.pool)
-        .await?;
-        Ok(rows.into_iter().map(|(name,)| name).collect())
+        Ok(self
+            .list_emit_eligible_relationship_types()
+            .await?
+            .into_iter()
+            .map(|predicate| predicate.name)
+            .collect())
     }
 
     /// Store an unrecognized fact durably for governance instead of dropping

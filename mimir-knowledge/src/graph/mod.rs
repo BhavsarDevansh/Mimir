@@ -29,7 +29,7 @@ mod preferences;
 mod relationships;
 mod sources;
 mod taxonomy;
-pub use taxonomy::{UnrecognizedFact, UnrecognizedFactStage};
+pub use taxonomy::{EmitEligiblePredicate, UnrecognizedFact, UnrecognizedFactStage};
 
 pub use predicates::{
     CANONICAL_PREDICATES, CONNECTOR_EMITTED_PREDICATES, MULTI_VALUED_PREDICATES,

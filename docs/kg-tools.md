@@ -189,9 +189,9 @@ Migration `051` (issue #403) seeds four query-only abstract parents so subtree e
 
 ### Description
 
-Launches a dedicated **RetrievalAgent** — an ephemeral LLM session with only retrieval tools — to investigate the knowledge graph and conversation history. The agent runs autonomously for up to 25 tool-call rounds, querying entities, traversing relationships, and searching past conversations. When satisfied, it calls `finish_retrieval` and returns a structured `RetrievedContext`.
+Launches the deterministic **RetrievalAgent** to investigate the knowledge graph and conversation history. Rust builds a fixed plan: one entity search per alphanumeric task token, one conversation search, then one facts query and one bounded relationship traversal for each distinct candidate entity. There is no inner LLM tool loop, no `finish_retrieval` signal, and no duplicate-call cache.
 
-`retrieve_context` is registered in the `ToolRegistry` with a **factory** (issue #441): the registry stores a prototype instance for schema export, and rebuilds the tool per request with the request-resolved LLM (model/temperature overrides) from the `ToolContext` passed to `ToolRegistry::execute`. This means the tool flows through the same dispatch path as every other tool — the registry applies the permission level (Auto/Ask/Disabled) and the incognito write-tool guard uniformly, and the chat route has no special case for it.
+`retrieve_context` is registered in the `ToolRegistry` with a **factory** (issue #441): the registry stores a prototype instance for schema export and rebuilds the tool per request with request-scoped dependencies such as the streaming progress channel. This means the tool flows through the same dispatch path as every other tool — the registry applies the permission level (Auto/Ask/Disabled) and the incognito write-tool guard uniformly, and the chat route has no special case for it.
 
 ### Output
 
@@ -223,8 +223,8 @@ The tool returns a `ToolOutput` whose `result` field contains a JSON-serialized 
       "created_at": "2026-05-01T12:00:00Z"
     }
   ],
-  "finish_reason": "Found all relevant preferences",
-  "rounds_used": 3
+  "finish_reason": "completed",
+  "steps_executed": 5
 }
 ```
 

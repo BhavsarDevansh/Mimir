@@ -3,7 +3,6 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use mimir_core::llm::backend::LlmBackend;
 use mimir_core::tools::{Tool, ToolError, ToolOutput, ToolPermission, ToolProgress};
 use serde::Deserialize;
 use serde_json::Value;
@@ -24,7 +23,6 @@ struct RetrieveContextInput {
 pub struct RetrieveContextTool {
     kg: Arc<KnowledgeGraph>,
     context_manager: Arc<mimir_core::context::ContextManager>,
-    llm: Arc<dyn LlmBackend>,
     progress: Option<tokio::sync::mpsc::Sender<ToolProgress>>,
 }
 
@@ -35,12 +33,10 @@ impl RetrieveContextTool {
     pub fn new(
         kg: Arc<KnowledgeGraph>,
         context_manager: Arc<mimir_core::context::ContextManager>,
-        llm: Arc<dyn LlmBackend>,
     ) -> Self {
         Self {
             kg,
             context_manager,
-            llm,
             progress: None,
         }
     }
@@ -104,11 +100,7 @@ impl Tool for RetrieveContextTool {
 
         info!(task_len = task.len(), "spawning retrieval agent");
 
-        let agent = RetrievalAgent::new(
-            Arc::clone(&self.llm),
-            Arc::clone(&self.kg),
-            Arc::clone(&self.context_manager),
-        );
+        let agent = RetrievalAgent::new(Arc::clone(&self.kg), Arc::clone(&self.context_manager));
         let mut agent = agent;
         if let Some(tx) = &self.progress {
             agent = agent.with_progress(tx.clone());

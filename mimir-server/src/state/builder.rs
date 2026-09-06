@@ -102,7 +102,6 @@ pub(super) async fn init_knowledge_graph(
     cfg: &Config,
     tool_registry: &ToolRegistry,
     context_manager: &Arc<ContextManager>,
-    llm: &Arc<dyn LlmBackend>,
 ) -> anyhow::Result<KnowledgeGraphInit> {
     let kg_db_path = mimir_core::paths::resolve_db_path(
         cfg.knowledge.db_path.clone(),
@@ -243,9 +242,8 @@ pub(super) async fn init_knowledge_graph(
         ))),
     );
     // `retrieve_context` is rebuilt per request with the request-resolved
-    // LLM (model/temperature overrides) via a registry factory, so it flows
-    // through the same dispatch path and permission checks as every other
-    // tool (issue #441).
+    // progress channel via a registry factory, so it flows through the same
+    // dispatch path and permission checks as every other tool (issue #441).
     let retrieve_kg = Arc::clone(&knowledge_graph);
     let retrieve_context_manager = Arc::clone(context_manager);
     register_tool_with_factory(
@@ -253,13 +251,11 @@ pub(super) async fn init_knowledge_graph(
         Arc::new(mimir_knowledge::RetrieveContextTool::new(
             Arc::clone(&knowledge_graph),
             Arc::clone(context_manager),
-            Arc::clone(llm),
         )),
         Arc::new(move |ctx: &mimir_core::tools::ToolContext| {
             let mut tool = mimir_knowledge::RetrieveContextTool::new(
                 Arc::clone(&retrieve_kg),
                 Arc::clone(&retrieve_context_manager),
-                Arc::clone(&ctx.llm),
             );
             if let Some(ref tx) = ctx.progress {
                 tool = tool.with_progress(tx.clone());
@@ -844,8 +840,7 @@ impl AppState {
         let context_manager = init_context_manager(&cfg).await?;
         let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
         let tool_registry = init_tool_registry(&context_manager);
-        let kg_init =
-            init_knowledge_graph(&cfg, &tool_registry, &context_manager, &llm_client).await?;
+        let kg_init = init_knowledge_graph(&cfg, &tool_registry, &context_manager).await?;
         let job_queue = init_job_queue(&cfg).await?;
         let agent_runtime = init_agent_runtime().await;
         let last_user_activity = Arc::new(AtomicU64::new(0));

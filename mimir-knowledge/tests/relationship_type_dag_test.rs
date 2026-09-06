@@ -427,11 +427,9 @@ async fn alias_resolution_returns_canonical_id() {
         .unwrap();
 
     // The alias table is the single source of truth for predicate resolution
-    // (issue #136). The extraction pipeline routes through
-    // `mimir-test-support::ensure_relationship_type`, which resolves aliases
-    // like this one; here we
-    // verify the resolution primitive directly, and the extraction integration
-    // tests cover the full path.
+    // (issue #136). This test uses `mimir-test-support::ensure_relationship_type`
+    // as a fixture helper to exercise alias resolution; production extraction
+    // routes through `resolve_canonical_relationship_type`.
     let resolved = kg
         .resolve_relationship_type_alias("test_alumni_alias")
         .await

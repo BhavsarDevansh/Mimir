@@ -17,6 +17,7 @@ use mimir_core::llm::types::StreamItem;
 use tracing::error;
 
 use crate::error;
+use crate::memory_view::{BudgetPolicy, compose_memory_view};
 use crate::state::AppState;
 
 pub(crate) static INCOGNITO_COUNTER: AtomicI64 = AtomicI64::new(-1);
@@ -79,35 +80,9 @@ fn tool_call_event(name: &str, display_name: &str, result: &str) -> Event {
 /// Shared by the native chat routes and the OpenAI-compatible provider
 /// surface (issue #388).
 pub(crate) async fn build_memory_context(state: &Arc<AppState>) -> String {
-    let condensed = match state.knowledge_graph.get_condensed_memory().await {
-        Ok(Some(text)) => text,
-        Ok(None) => String::new(),
-        Err(e) => {
-            tracing::warn!("Failed to read condensed memory for chat: {}", e);
-            String::new()
-        }
-    };
-    let cfg = state.config.snapshot().await;
-    let upcoming = if let Some(uid) = state.user_entity_id {
-        match state
-            .knowledge_graph
-            .render_upcoming_section(uid, cfg.memory.temporal_horizon as i64, 10)
-            .await
-        {
-            Ok(text) => text,
-            Err(e) => {
-                tracing::warn!("Failed to render upcoming section for chat: {}", e);
-                String::new()
-            }
-        }
-    } else {
-        String::new()
-    };
-    if upcoming.is_empty() {
-        condensed
-    } else {
-        format!("{}\n\n{}", condensed, upcoming)
-    }
+    compose_memory_view(state)
+        .await
+        .render(BudgetPolicy::Budgeted)
 }
 
 /// Compose the full system prompt: personality prompt + memory context +

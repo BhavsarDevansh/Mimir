@@ -5,6 +5,7 @@ use axum::{Json, extract::State};
 
 use mimir_api_types::StatusResponse;
 
+use crate::memory_view::compose_memory_view;
 use crate::state::AppState;
 
 /// Health and runtime status endpoint.
@@ -22,45 +23,16 @@ pub async fn status_handler(State(state): State<Arc<AppState>>) -> Json<StatusRe
         Err(_) => (false, None),
     };
 
-    let condensed = match state.knowledge_graph.get_condensed_memory().await {
-        Ok(Some(text)) => text,
-        Ok(None) => String::new(),
-        Err(e) => {
-            tracing::warn!("Failed to read condensed memory for status: {}", e);
-            String::new()
-        }
-    };
-    let cfg = state.config.snapshot().await;
-    let upcoming = if let Some(uid) = state.user_entity_id {
-        match state
-            .knowledge_graph
-            .render_upcoming_section(uid, cfg.memory.temporal_horizon as i64, 10)
-            .await
-        {
-            Ok(text) => text,
-            Err(e) => {
-                tracing::warn!("Failed to render upcoming section for status: {}", e);
-                String::new()
-            }
-        }
-    } else {
+    let view = compose_memory_view(&state).await;
+    let memory_text = if view.core_degraded {
         String::new()
-    };
-
-    let memory_text = if upcoming.is_empty() {
-        condensed
     } else {
-        format!("{}\n\n{}", condensed, upcoming)
+        view.content()
     };
-    let memory_chars = memory_text.chars().count();
+    let memory_chars = view.usage.char_count;
     let memory_exists = !memory_text.is_empty();
-
-    let memory_limit = cfg.memory.char_limit as usize;
-    let memory_usage_pct = if memory_limit > 0 {
-        (memory_chars as f64 / memory_limit as f64) * 100.0
-    } else {
-        0.0
-    };
+    let memory_limit = view.usage.char_limit;
+    let memory_usage_pct = view.usage.usage_percent;
 
     let config_path =
         mimir_core::config::Config::config_path().map(|p| p.to_string_lossy().to_string());

@@ -4,6 +4,7 @@ use axum::{Json, extract::State, http::StatusCode, response::Response};
 use mimir_api_types::OptimizationRunNowResponse;
 
 use crate::error;
+use crate::memory_view::{BudgetPolicy, compose_memory_view};
 use crate::state::AppState;
 
 /// Return the live condensed memory block.
@@ -11,42 +12,14 @@ use crate::state::AppState;
 /// Combines the LLM-condensed stable facts from system_state with a
 /// freshly-rendered upcoming events section.
 pub async fn memory_handler(State(state): State<Arc<AppState>>) -> Result<String, Response> {
-    let condensed = match state.knowledge_graph.get_condensed_memory().await {
-        Ok(Some(text)) => text,
-        Ok(None) => "No stable memory yet.".to_string(),
-        Err(e) => {
-            tracing::warn!("Failed to read condensed memory: {}", e);
-            return Err(error::memory_error(anyhow::Error::new(e)));
-        }
-    };
+    let view = compose_memory_view(&state).await;
+    if view.core_degraded {
+        return Err(error::memory_error(anyhow::anyhow!(
+            view.warnings.join("; ")
+        )));
+    }
 
-    let cfg = state.config.snapshot().await;
-    let upcoming = if let Some(user_id) = state.user_entity_id {
-        match state
-            .knowledge_graph
-            .render_upcoming_section(user_id, cfg.memory.temporal_horizon as i64, 10)
-            .await
-        {
-            Ok(text) => text,
-            Err(e) => {
-                tracing::warn!("Failed to render upcoming section: {}", e);
-                String::new()
-            }
-        }
-    } else {
-        String::new()
-    };
-
-    let combined = if upcoming.is_empty() {
-        condensed
-    } else {
-        format!("{}\n\n{}", condensed, upcoming)
-    };
-
-    Ok(mimir_knowledge::queries::memory::refresh_now_line(
-        &combined,
-        state.knowledge_graph.now(),
-    ))
+    Ok(view.render(BudgetPolicy::Full))
 }
 
 /// POST /memory/refresh

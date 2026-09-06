@@ -12,6 +12,7 @@
 
 pub mod app;
 pub mod error;
+pub mod memory_view;
 pub mod peer;
 pub mod routes;
 pub mod server;

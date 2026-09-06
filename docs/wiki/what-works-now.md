@@ -1,8 +1,8 @@
 # What Works in Mimir Today
 
-> **Last updated:** 2026-09-03
+> **Last updated:** 2026-09-06
 >
-> **Version:** 0.158.0
+> **Version:** 0.162.0
 >
 > This file is the **feature-level roadmap**: for every feature it records what exists, what is still pending to make it robust, and the GitHub issue tracking each step. The phase-level roadmap lives in `VISION/09-Roadmap/` and the release history in GitHub Releases; this file deliberately does not repeat either.
 
@@ -158,7 +158,7 @@ All client commands talk to the daemon over HTTP except `mimir personality list`
 
 | Feature | Status | Notes & pending work |
 |---------|--------|----------------------|
-| Knowledge graph memory | ✅ Works | Live condensed memory (~2,500 chars) ranked from the knowledge graph (confidence × category × temporal boost × priority × centrality) and injected into every system prompt with a request-current `Now:` RFC 3339 UTC + weekday anchor; fact scans use the migration 059 subject/relationship composite index. |
+| Knowledge graph memory | ✅ Works | Live condensed memory (~2,500 chars) ranked from the knowledge graph (confidence × category × temporal boost × priority × centrality) and injected into every system prompt through one shared composed memory view with a request-current `Now:` RFC 3339 UTC + weekday anchor; fact scans use the migration 059 subject/relationship composite index. |
 | Hook-driven learning | ✅ Works | The `remember.chat` background hook extracts facts after each non-incognito turn, debounced per session and idle-gated ([#386](https://github.com/BhavsarDevansh/Mimir/issues/386)); supersedes the LLM-orchestrated `remember` tool ([#137](https://github.com/BhavsarDevansh/Mimir/issues/137)) and the Librarian fallback ([#156](https://github.com/BhavsarDevansh/Mimir/issues/156)). |
 | Frozen snapshots | ✅ Works | Condensed memory is read from `system_state` once per session; changes don't affect the current chat. The `Now:` anchor is the deliberate exception and is refreshed at request composition time. |
 | Knowledge-graph managed | ✅ Works | Memory is a ranked view of the graph; no `memory.md` file. |

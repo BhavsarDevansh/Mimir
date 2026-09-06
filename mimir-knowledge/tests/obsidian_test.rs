@@ -17,7 +17,6 @@ use mimir_knowledge::models::preference::{
 use mimir_knowledge::models::source::{ExtractionMethod, SourceType};
 use mimir_knowledge::normalize::{NormalizedFact, Provenance, normalize_and_insert};
 use mimir_knowledge::obsidian::{ObsidianFile, scan_markdown_files};
-use mimir_knowledge::queries::entity::get_exact_name;
 
 /// Fresh KnowledgeGraph in a temp dir.
 async fn fresh_kg() -> (KnowledgeGraph, tempfile::TempDir) {
@@ -656,6 +655,10 @@ type: Person
 #[tokio::test]
 async fn import_object_cache_does_not_survive_an_entity_rename() {
     let (kg, _dir) = fresh_kg().await;
+    kg.create_entity("Alice", EntityType::Person, &[])
+        .await
+        .unwrap();
+
     let devansh = ObsidianFile {
         relative_path: "Devansh.md".to_string(),
         content: r#"---
@@ -669,20 +672,14 @@ type: Person
 "#
         .to_string(),
     };
-    kg.import_obsidian(std::slice::from_ref(&devansh), false)
+    let alice = kg
+        .create_entity("Alice", EntityType::Person, &[])
         .await
         .unwrap();
-    let alice = get_exact_name(kg.pool(), "Alice")
-        .await
-        .unwrap()
-        .expect("Alice was created");
 
     let rename = ObsidianFile {
         relative_path: "Alice.md".to_string(),
-        content: format!(
-            "---\nentity_id: {}\ntype: Person\n---\n\n# Alice Smith\n",
-            alice.id
-        ),
+        content: format!("---\nentity_id: {}\ntype: Person\n---\n\n# Zed\n", alice.id),
     };
     let bob = ObsidianFile {
         relative_path: "Bob.md".to_string(),
@@ -698,9 +695,13 @@ type: Person
         .to_string(),
     };
 
-    let outcome = kg.import_obsidian(&[rename, bob], false).await.unwrap();
-    assert_eq!(outcome.counts.entities_new, 2, "{:?}", outcome.counts);
-    assert_eq!(outcome.counts.facts_new, 1);
+    let outcome = kg
+        .import_obsidian(&[devansh, rename, bob], false)
+        .await
+        .unwrap();
+    assert_eq!(outcome.counts.entities_updated, 1, "{:?}", outcome.counts);
+    assert_eq!(outcome.counts.entities_new, 3, "{:?}", outcome.counts);
+    assert_eq!(outcome.counts.facts_new, 2, "{:?}", outcome.counts);
 }
 
 #[tokio::test]

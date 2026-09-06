@@ -42,13 +42,20 @@ pub struct ObsidianFile {
 
 #[derive(Default)]
 struct ObjectResolutionCache {
-    resolved: HashMap<String, Entity>,
+    resolved: HashMap<String, ResolvedEntity>,
     allowed_object_types: HashMap<(i16, i16), EntityType>,
 }
 
+struct ResolvedEntity {
+    id: i32,
+    name: String,
+}
+
 impl ObjectResolutionCache {
-    fn get_resolved(&self, name: &str) -> Option<&Entity> {
-        self.resolved.get(&name.to_ascii_lowercase())
+    fn get_resolved(&self, name: &str) -> Option<(String, i32)> {
+        self.resolved
+            .get(&name.to_ascii_lowercase())
+            .map(|entity| (entity.name.clone(), entity.id))
     }
 
     /// Only cache canonical names. Alias matches can depend on the
@@ -56,8 +63,13 @@ impl ObjectResolutionCache {
     /// different object-type constraint with the same alias text.
     fn remember(&mut self, name: &str, entity: &Entity) {
         if entity.name.eq_ignore_ascii_case(name) {
-            self.resolved
-                .insert(name.to_ascii_lowercase(), entity.clone());
+            self.resolved.insert(
+                name.to_ascii_lowercase(),
+                ResolvedEntity {
+                    id: entity.id,
+                    name: entity.name.clone(),
+                },
+            );
         }
     }
 
@@ -614,10 +626,6 @@ async fn import_document(
     Ok(())
 }
 
-/// Resolve a fact line's object entity and update the entity-creation count.
-///
-/// Returns the object's canonical name and id (`None` id when the object is a
-/// literal, or when the entity would be created in dry-run mode).
 /// Per-fact planning inputs and mutable accounting state for object lookup.
 struct ObjectPlanningContext<'a> {
     relationship_type_id: i16,
@@ -628,6 +636,10 @@ struct ObjectPlanningContext<'a> {
     object_cache: &'a mut ObjectResolutionCache,
 }
 
+/// Resolve a fact line's object entity and update the entity-creation count.
+///
+/// Returns the object's canonical name and id (`None` id when the object is a
+/// literal, or when the entity would be created in dry-run mode).
 async fn plan_object(
     kg: &KnowledgeGraph,
     object: &ObsidianObject,
@@ -641,8 +653,8 @@ async fn plan_object(
             // miss a same-name entity of another type (e.g. a `Person`
             // `[[Alice]]`). `create_entity`'s upsert reuses that entity, so
             // the exact same-name fallback keeps dry-run and apply identical.
-            if let Some(entity) = context.object_cache.get_resolved(name) {
-                return Ok((entity.name.clone(), Some(entity.id)));
+            if let Some((canonical_name, id)) = context.object_cache.get_resolved(name) {
+                return Ok((canonical_name, Some(id)));
             }
             let results =
                 queries::entity::get_by_name_typed(kg.pool(), name, EntityType::Concept).await?;

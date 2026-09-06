@@ -120,8 +120,8 @@ impl<'a> OptimizationRunner<'a> {
              FROM facts a \
              JOIN facts b ON b.id > a.id \
               AND b.subject_id = a.subject_id \
-              AND COALESCE(b.object_id, -1) = COALESCE(a.object_id, -1) \
-              AND COALESCE(b.object_literal, '') = COALESCE(a.object_literal, '') \
+              AND b.object_id IS a.object_id \
+              AND b.object_literal IS a.object_literal \
               AND b.relationship_type_id != a.relationship_type_id \
              JOIN relationship_types rta ON rta.id = a.relationship_type_id \
              JOIN relationship_types rtb ON rtb.id = b.relationship_type_id \

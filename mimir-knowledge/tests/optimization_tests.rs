@@ -630,6 +630,109 @@ async fn semantic_dedup_sends_strict_json_prompt_to_llm() {
     assert_eq!(tool["function"]["name"], "evaluate_dedup_candidates");
 }
 
+#[tokio::test]
+async fn semantic_dedup_uses_null_aware_object_identity() {
+    let graph = TestGraph::new().await;
+    let person = graph.create_person("Devansh").await;
+    let mut relationship_ids = Vec::with_capacity(3);
+    for name in ["prefers", "hobby", "dislikes"] {
+        let relationship_id: i16 =
+            sqlx::query_scalar("SELECT id FROM relationship_types WHERE name = ?")
+                .bind(name)
+                .fetch_one(graph.kg.pool())
+                .await
+                .unwrap();
+        relationship_ids.push(relationship_id);
+    }
+    let null_fact = insert_unmanaged_fact(
+        &graph,
+        UnmanagedFactSeed {
+            subject_id: person,
+            relationship_type_id: relationship_ids[0],
+            object_id: None,
+            object_literal: None,
+            confidence: 0.80,
+            valid_from: None,
+            valid_until: None,
+            source_type: None,
+        },
+    )
+    .await;
+    let empty_fact = insert_unmanaged_fact(
+        &graph,
+        UnmanagedFactSeed {
+            subject_id: person,
+            relationship_type_id: relationship_ids[1],
+            object_id: None,
+            object_literal: Some(String::new()),
+            confidence: 0.80,
+            valid_from: None,
+            valid_until: None,
+            source_type: None,
+        },
+    )
+    .await;
+    let other_null_fact = insert_unmanaged_fact(
+        &graph,
+        UnmanagedFactSeed {
+            subject_id: person,
+            relationship_type_id: relationship_ids[2],
+            object_id: None,
+            object_literal: None,
+            confidence: 0.80,
+            valid_from: None,
+            valid_until: None,
+            source_type: None,
+        },
+    )
+    .await;
+
+    let mock = Arc::new(
+        MockLlmClient::builder()
+            .push_chat_message(
+                Message {
+                    role: "assistant".to_string(),
+                    content: String::new(),
+                    tool_calls: Some(vec![ToolCall {
+                        index: 0,
+                        id: "call_1".to_string(),
+                        call_type: "function".to_string(),
+                        function: FunctionCall {
+                            name: "evaluate_dedup_candidates".to_string(),
+                            arguments: r#"{"candidates":[]}"#.to_string(),
+                        },
+                    }]),
+                    tool_call_id: None,
+                },
+                Usage::default(),
+            )
+            .build(),
+    );
+    let llm: Arc<dyn LlmBackend> = mock.clone();
+    let runner = OptimizationRunner::new(
+        &graph.kg,
+        OptimizationConfig::for_test(graph.backup_dir()),
+        Some(llm),
+    );
+
+    runner
+        .run_pass(PassName::SemanticDeduplication)
+        .await
+        .unwrap();
+
+    let calls = mock.chat_calls();
+    assert_eq!(calls.len(), 1);
+    let candidates: serde_json::Value = serde_json::from_str(&calls[0][1].content).unwrap();
+    let candidates = candidates.as_array().unwrap();
+    assert_eq!(candidates.len(), 1);
+    let pair = [
+        candidates[0]["fact_a_id"].as_i64().unwrap(),
+        candidates[0]["fact_b_id"].as_i64().unwrap(),
+    ];
+    assert_eq!(pair, [null_fact, other_null_fact].map(i64::from));
+    assert!(!pair.contains(&(empty_fact as i64)));
+}
+
 /// Build a fresh `KnowledgeGraph` driven by a [`MockClock`] so the pending
 /// cleanup pass can fast-forward past a retention window.
 async fn pending_kg_with_clock(

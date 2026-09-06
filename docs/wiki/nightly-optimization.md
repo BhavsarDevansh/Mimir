@@ -6,7 +6,7 @@ Every night Mimir performs a multi-step health check on your knowledge graph:
 
 1. **Back up** – creates a dated snapshot of the knowledge database.
 2. **Deduplicate** – merges identical facts and boosts their confidence.
-3. **Semantic deduplication** – asks the LLM whether similar facts should be merged; high-confidence merges happen automatically, uncertain ones are queued for your review. Each merge carries forward the fact's current confidence.
+3. **Semantic deduplication** – asks the LLM whether similar facts should be merged; high-confidence merges happen automatically, uncertain ones are queued for your review. A missing object and an empty string are distinct objects, and each merge carries forward the fact's current confidence.
 4. **Entity semantic deduplication** – asks the LLM whether similar entities (shared aliases or near-identical names) are the same person, place, or thing. Candidates are only ever **queued for your review** — nothing is merged automatically.
 5. **Resolve contradictions** – keeps the most reliable version when facts disagree.
 6. **Recalculate confidence** – updates any fact flagged as needing recalculation, recomputing it from its parents and clearing the flag, then refreshing the facts inferred from it.

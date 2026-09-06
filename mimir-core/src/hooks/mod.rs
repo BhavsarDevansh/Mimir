@@ -442,10 +442,9 @@ impl HookEngine {
     }
 
     /// Signal the dispatch loop to shut down gracefully and cancel the
-    /// in-flight hook run, then await the loop's exit so the terminal
-    /// `job_runs` status for the in-flight run is written before the caller
-    /// tears down the runtime (a detached loop could still be finalising the
-    /// run's DB record when the pool closes).
+    /// in-flight hook run, await the run's terminal `job_runs` status, and
+    /// (when started) await the loop's exit so no run is still finalising its
+    /// DB record when the caller tears down the runtime.
     pub async fn shutdown(&self) {
         // Register the exit waiter *before* signalling: the dispatch loop
         // calls `notify_waiters()` as soon as it observes the signal, and a
@@ -456,13 +455,18 @@ impl HookEngine {
         // loop was never started, leaving no wake-up to await.
         let exited = self.inner.dispatch_exited.notified();
         let _ = self.inner.shutdown_tx.send(true);
-        if self.inner.started.load(Ordering::Acquire) {
-            {
-                let running = self.inner.running.lock().await;
-                for hook_id in running.keys() {
-                    self.inner.job_queue.cancel(hook_id);
-                }
+        loop {
+            let running = self.inner.running.lock().await;
+            if running.is_empty() {
+                break;
             }
+            for hook_id in running.keys() {
+                self.inner.job_queue.cancel(hook_id);
+            }
+            drop(running);
+            tokio::task::yield_now().await;
+        }
+        if self.inner.started.load(Ordering::Acquire) {
             // The dispatch loop exits promptly once the shutdown signal is
             // observed (see `start`); the timeout only guards against a
             // stalled loop.

@@ -667,6 +667,47 @@ async fn shutdown_without_start_returns_promptly() {
 }
 
 #[tokio::test]
+async fn shutdown_finalises_force_run_started_before_dispatch() {
+    // A force run registers its in-memory instance before the durable queue
+    // registers the cancellation token. Shutdown must still cancel it and
+    // wait for its terminal `job_runs` record, even when the dispatch loop
+    // was never started (issue #611 review).
+    let temp = tempfile::tempdir().unwrap();
+    let jq = Arc::new(JobQueue::init(temp.path().join("jobs.db")).await.unwrap());
+    let llm = Arc::new(MockLlmClient::builder().build());
+    let (engine, _shutdown_rx) = HookEngine::new(jq.clone(), llm);
+    let handler = TestHandler::blocking(vec![HookOutcome::Success]);
+    engine
+        .register(hook(
+            "h",
+            QueuePolicy::Multiple,
+            Gate::Ungated,
+            handler.clone(),
+        ))
+        .await
+        .unwrap();
+
+    let engine_clone = Arc::clone(&engine);
+    let force_handle = tokio::spawn(async move { engine_clone.force_run("h").await });
+    wait_for(|| handler.calls().len() == 1).await;
+
+    engine.shutdown().await;
+    let last_run = jq
+        .status("h")
+        .await
+        .unwrap()
+        .last_run
+        .expect("shutdown must wait for the force run's terminal state");
+    assert_eq!(last_run.status, crate::job_queue::JobRunStatus::Cancelled);
+    assert!(last_run.finished_at.is_some());
+
+    handler.release();
+    let summary = force_handle.await.unwrap().unwrap();
+    assert_eq!(summary.status, crate::job_queue::JobRunStatus::Cancelled);
+    assert!(!engine.is_running("h").await);
+}
+
+#[tokio::test]
 async fn shutdown_cancels_in_flight_run_and_keeps_pending_instances() {
     // `shutdown` cancels the running instance, awaits the dispatch loop's
     // exit (so the terminal `job_runs` status is written before teardown),

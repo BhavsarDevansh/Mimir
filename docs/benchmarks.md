@@ -177,7 +177,7 @@ cargo bench -p mimir-core --bench db_init --bench mock_llm
 | Benchmark | What it measures | Baseline |
 |-----------|------------------|----------|
 | `app_state_from_config_with_llm_build` | Full daemon `AppState` build (context + KG + job queue + hooks + scheduler + connectors) | 81 ms |
-| `app_state_from_config_with_llm_build_shutdown` | Build + `state.shutdown()`; the 5 s is the hook-exit timeout when the dispatch loop never started (issue #536) | 5.08 s |
+| `app_state_from_config_with_llm_build_shutdown` | Build + `state.shutdown()` with a hook engine that has not started its dispatch loop | 5.08 s before #536; 114 ms locally after the fix, matching build-only overhead within run-to-run variation |
 
 ```bash
 cargo bench -p mimir-server --bench state_build
@@ -193,4 +193,4 @@ scripts/perf-baseline.sh
 
 Baseline on 2026-08-26 (cargo-nextest 0.9.143, cargo 1.97.1, debug profile): 2315 tests, 189.3 s wall, 755.9 s summed durations. The slowest tests are the connector E2E suite (12.9 s), `daemon_guard::tests::test_start_timeout` (10.4 s, issue #530), `optimization_tests::concurrent_full_runs...` (8.2 s), and `kg_traverse_tests::test_kg_traverse_node_cap` (8.0 s). Manual measurements: `mimir stop` takes 2.2 s because of a hard-coded 2 s sleep (issue #523), and `mimir-knowledge` fact-heavy seeding pays ~0.9 ms per insert (issues #526, #527).
 
-Open performance issues tracked by these benchmarks: #523 (CLI stop sleep), #524/#525 (SQLite pragmas), #526 (fact-insert overhead), #529 (alias batch insert), #532 (fixed sleeps in tests), #535 (migration template), #536 (hook-exit timeout), #537 (supervisor poll loop). The daemon-guard start timeout is now injectable for tests (#530), the LLM-client retry schedule is injectable (#531), and core hook/scheduler and server integration tests use event-driven or deterministic waits (#533, #534), so those tests no longer wait through fixed sleeps.
+Open performance issues tracked by these benchmarks: #523 (CLI stop sleep), #524/#525 (SQLite pragmas), #526 (fact-insert overhead), #529 (alias batch insert), #532 (fixed sleeps in tests), #535 (migration template), #537 (supervisor poll loop). The hook shutdown timeout for an unstarted dispatch loop was removed (#536). The daemon-guard start timeout is now injectable for tests (#530), the LLM-client retry schedule is injectable (#531), and core hook/scheduler and server integration tests use event-driven or deterministic waits (#533, #534), so those tests no longer wait through fixed sleeps.

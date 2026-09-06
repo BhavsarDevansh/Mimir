@@ -22,6 +22,7 @@ use std::any::Any;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::time::Instant;
 
@@ -282,6 +283,9 @@ struct EngineInner {
     /// final in-flight run's terminal `job_runs` write before the caller
     /// tears down the runtime.
     dispatch_exited: Notify,
+    /// Whether the dispatch loop has started. A loop can only be running
+    /// (and `dispatch_exited` can only be awaited) after this flag is set.
+    started: AtomicBool,
     /// Last user-activity instant (cooldown for idle-gated hooks). A
     /// `std::sync::Mutex` because it is never held across an `await`.
     last_user_activity: StdMutex<Option<Instant>>,
@@ -330,6 +334,7 @@ impl HookEngine {
                 running: Mutex::new(HashMap::new()),
                 transition: Mutex::new(()),
                 dispatch_exited: Notify::new(),
+                started: AtomicBool::new(false),
                 last_user_activity: StdMutex::new(None),
                 notify: Notify::new(),
                 #[cfg(test)]
@@ -442,26 +447,26 @@ impl HookEngine {
     /// tears down the runtime (a detached loop could still be finalising the
     /// run's DB record when the pool closes).
     pub async fn shutdown(&self) {
-        // Register the exit waiter *before* signalling: the dispatch loop
-        // calls `notify_waiters()` as soon as it observes the signal, and a
-        // `Notified` future created after that call would miss the wake-up
-        // and sit out the full timeout. `notify_waiters()` notifications are
-        // delivered to futures created before the call, so creating the
-        // future up front closes the race.
-        let exited = self.inner.dispatch_exited.notified();
         let _ = self.inner.shutdown_tx.send(true);
-        {
-            let running = self.inner.running.lock().await;
-            for hook_id in running.keys() {
-                self.inner.job_queue.cancel(hook_id);
+        if self.inner.started.load(Ordering::Acquire) {
+            // Register the exit waiter *before* awaiting: the dispatch loop
+            // calls `notify_waiters()` as soon as it observes the signal, and
+            // a `Notified` future created after that call would miss the
+            // wake-up and sit out the full timeout.
+            let exited = self.inner.dispatch_exited.notified();
+            {
+                let running = self.inner.running.lock().await;
+                for hook_id in running.keys() {
+                    self.inner.job_queue.cancel(hook_id);
+                }
             }
+            // The dispatch loop exits promptly once the shutdown signal is
+            // observed (see `start`); the timeout only guards against a
+            // stalled loop.
+            tokio::time::timeout(Duration::from_secs(5), exited)
+                .await
+                .ok();
         }
-        // The dispatch loop exits promptly once the shutdown signal is
-        // observed (see `start`); the timeout only guards against a caller
-        // that never started the loop.
-        tokio::time::timeout(Duration::from_secs(5), exited)
-            .await
-            .ok();
     }
 
     /// Force a hook to run immediately, bypassing debounce, cooldown, idle
@@ -552,6 +557,7 @@ impl HookEngine {
     ///
     /// Runs until the shutdown watch channel fires.
     pub async fn start(self: Arc<Self>, mut shutdown_rx: watch::Receiver<bool>) {
+        self.inner.started.store(true, Ordering::Release);
         loop {
             if *shutdown_rx.borrow() {
                 info!("hooks: shutting down");

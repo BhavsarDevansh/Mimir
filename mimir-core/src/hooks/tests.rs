@@ -656,6 +656,17 @@ async fn shutdown_exits_dispatch_loop() {
 }
 
 #[tokio::test]
+async fn shutdown_without_start_returns_promptly() {
+    let (engine, _temp, _shutdown_rx) = test_engine().await;
+    tokio::time::pause();
+    let result = tokio::time::timeout(Duration::from_millis(100), engine.shutdown()).await;
+    assert!(
+        result.is_ok(),
+        "shutdown must not wait when the dispatch loop never started"
+    );
+}
+
+#[tokio::test]
 async fn shutdown_cancels_in_flight_run_and_keeps_pending_instances() {
     // `shutdown` cancels the running instance, awaits the dispatch loop's
     // exit (so the terminal `job_runs` status is written before teardown),

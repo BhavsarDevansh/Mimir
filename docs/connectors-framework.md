@@ -14,6 +14,10 @@
 
 Connectors never hold a `sqlx` pool handle. All persistence goes through the [`mimir_knowledge::KnowledgeGraph`] facade. Accordingly, `mimir-connectors` depends on `mimir-core` and `mimir-knowledge` **only** and does **not** declare a direct `sqlx` dependency (it enters the build graph only transitively, via `mimir-knowledge`'s internal use).
 
+## Connector row columns (issue #560)
+
+Connector registry reads and row-returning writes share one compile-time `connector_column_list` macro. Every `SELECT` and `RETURNING` projection uses that same source of truth, so adding a `connectors` column only requires the model/schema and the shared projection list to move together. The macro expands into a static SQL string, preserving SQLx's safe-static-SQL guarantee and all bind order/error semantics.
+
 ## Shared ingestion boundary (F4 / #181)
 
 The resolve → confidence → sensitivity-gate → insert orchestration lives in `mimir-knowledge::normalize` as a single reusable function, so connector ingestion and the `remember.chat` hook's conversational extraction share one deterministic Rust pipeline:

@@ -11,12 +11,29 @@ use crate::KnowledgeError;
 use crate::models::connector::{Connector, UpsertConnectorInput};
 use crate::models::enums::{ConnectorAuthState, ConnectorStatus};
 
+/// The shared `connectors` projection used by every row-returning query.
+macro_rules! connector_column_list {
+    () => {
+        "id, connector_type_id, slug, backend, display_name, config_json, status_id, \
+         auth_state_id, sync_cursor, durable_state, facts_accepted, facts_dropped, \
+         facts_staged, last_sync_at, last_error, created_at, updated_at"
+    };
+}
+
+/// Build a connector row query from literal SQL fragments while retaining the
+/// shared projection list and SQLx's compile-time-safe static SQL contract.
+macro_rules! connector_query_as {
+    ($($sql:tt)*) => {
+        sqlx::query_as::<_, Connector>(concat!($($sql)*))
+    };
+}
+
 /// List every registered connector instance, oldest first.
 pub async fn list_connectors(pool: &SqlitePool) -> Result<Vec<Connector>, KnowledgeError> {
-    let rows = sqlx::query_as::<_, Connector>(
-        "SELECT id, connector_type_id, slug, backend, display_name, config_json, \
-         status_id, auth_state_id, sync_cursor, durable_state, facts_accepted, facts_dropped, facts_staged, last_sync_at, last_error, created_at, updated_at \
-         FROM connectors ORDER BY id",
+    let rows = connector_query_as!(
+        "SELECT ",
+        connector_column_list!(),
+        " FROM connectors ORDER BY id"
     )
     .fetch_all(pool)
     .await?;
@@ -28,10 +45,10 @@ pub async fn get_connector_by_slug(
     pool: &SqlitePool,
     slug: &str,
 ) -> Result<Option<Connector>, KnowledgeError> {
-    let row = sqlx::query_as::<_, Connector>(
-        "SELECT id, connector_type_id, slug, backend, display_name, config_json, \
-         status_id, auth_state_id, sync_cursor, durable_state, facts_accepted, facts_dropped, facts_staged, last_sync_at, last_error, created_at, updated_at \
-         FROM connectors WHERE slug = ?",
+    let row = connector_query_as!(
+        "SELECT ",
+        connector_column_list!(),
+        " FROM connectors WHERE slug = ?"
     )
     .bind(slug)
     .fetch_optional(pool)
@@ -44,10 +61,10 @@ pub async fn get_connector(
     pool: &SqlitePool,
     id: i32,
 ) -> Result<Option<Connector>, KnowledgeError> {
-    let row = sqlx::query_as::<_, Connector>(
-        "SELECT id, connector_type_id, slug, backend, display_name, config_json, \
-         status_id, auth_state_id, sync_cursor, durable_state, facts_accepted, facts_dropped, facts_staged, last_sync_at, last_error, created_at, updated_at \
-         FROM connectors WHERE id = ?",
+    let row = connector_query_as!(
+        "SELECT ",
+        connector_column_list!(),
+        " FROM connectors WHERE id = ?"
     )
     .bind(id)
     .fetch_optional(pool)
@@ -87,7 +104,7 @@ pub async fn upsert_connector(
     // updates zero rows, so `RETURNING` yields nothing and we surface a clean
     // `ConnectorTypeMismatch` error (a pure insert or a same-type conflict
     // always returns exactly one row).
-    let row = sqlx::query_as::<_, Connector>(
+    let row = connector_query_as!(
         "INSERT INTO connectors \
          (connector_type_id, slug, backend, display_name, config_json, status_id, auth_state_id, \
           created_at, updated_at) \
@@ -100,9 +117,8 @@ pub async fn upsert_connector(
             auth_state_id = excluded.auth_state_id, \
             updated_at = excluded.updated_at \
          WHERE connectors.connector_type_id = excluded.connector_type_id \
-         RETURNING id, connector_type_id, slug, backend, display_name, config_json, \
-                   status_id, auth_state_id, sync_cursor, durable_state, facts_accepted, facts_dropped, facts_staged, last_sync_at, last_error, \
-                   created_at, updated_at",
+         RETURNING ",
+        connector_column_list!(),
     )
     .bind(connector_type_id)
     .bind(&input.slug)
@@ -144,14 +160,13 @@ pub async fn create_connector(
         .auth_state
         .unwrap_or(ConnectorAuthState::Unauthenticated) as i16;
 
-    let row = sqlx::query_as::<_, Connector>(
+    let row = connector_query_as!(
         "INSERT INTO connectors \
          (connector_type_id, slug, backend, display_name, config_json, status_id, auth_state_id, \
           created_at, updated_at) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
-         RETURNING id, connector_type_id, slug, backend, display_name, config_json, \
-                   status_id, auth_state_id, sync_cursor, durable_state, facts_accepted, facts_dropped, facts_staged, last_sync_at, last_error, \
-                   created_at, updated_at",
+         RETURNING ",
+        connector_column_list!(),
     )
     .bind(connector_type_id)
     .bind(&input.slug)
@@ -186,12 +201,11 @@ pub async fn update_sync_cursor(
     cursor: Option<&str>,
     now: DateTime<Utc>,
 ) -> Result<Connector, KnowledgeError> {
-    let row = sqlx::query_as::<_, Connector>(
+    let row = connector_query_as!(
         "UPDATE connectors SET sync_cursor = ?, last_sync_at = ?, updated_at = ? \
          WHERE id = ? \
-         RETURNING id, connector_type_id, slug, backend, display_name, config_json, \
-                   status_id, auth_state_id, sync_cursor, durable_state, facts_accepted, facts_dropped, facts_staged, last_sync_at, last_error, \
-                   created_at, updated_at",
+         RETURNING ",
+        connector_column_list!(),
     )
     .bind(cursor)
     .bind(now)
@@ -215,11 +229,10 @@ pub async fn update_durable_state(
     state: Option<&str>,
     now: DateTime<Utc>,
 ) -> Result<Connector, KnowledgeError> {
-    let row = sqlx::query_as::<_, Connector>(
+    let row = connector_query_as!(
         "UPDATE connectors SET durable_state = ?, updated_at = ? WHERE id = ? \
-         RETURNING id, connector_type_id, slug, backend, display_name, config_json, \
-                   status_id, auth_state_id, sync_cursor, durable_state, facts_accepted, facts_dropped, facts_staged, last_sync_at, last_error, \
-                   created_at, updated_at",
+         RETURNING ",
+        connector_column_list!(),
     )
     .bind(state)
     .bind(now)
@@ -251,15 +264,14 @@ pub async fn update_sync_progress_and_durable_state(
     now: DateTime<Utc>,
 ) -> Result<Connector, KnowledgeError> {
     let mut tx = pool.begin().await?;
-    let row = sqlx::query_as::<_, Connector>(
+    let row = connector_query_as!(
         "UPDATE connectors SET \
              sync_cursor = COALESCE(?, sync_cursor), \
              durable_state = COALESCE(?, durable_state), \
              last_sync_at = ?, updated_at = ? \
          WHERE id = ? \
-         RETURNING id, connector_type_id, slug, backend, display_name, config_json, \
-                   status_id, auth_state_id, sync_cursor, durable_state, facts_accepted, facts_dropped, facts_staged, last_sync_at, last_error, \
-                   created_at, updated_at",
+         RETURNING ",
+        connector_column_list!(),
     )
     .bind(cursor)
     .bind(durable_state)
@@ -284,12 +296,11 @@ pub async fn touch_last_sync(
     id: i32,
     now: DateTime<Utc>,
 ) -> Result<Connector, KnowledgeError> {
-    let row = sqlx::query_as::<_, Connector>(
+    let row = connector_query_as!(
         "UPDATE connectors SET last_sync_at = ?, updated_at = ? \
          WHERE id = ? \
-         RETURNING id, connector_type_id, slug, backend, display_name, config_json, \
-                   status_id, auth_state_id, sync_cursor, durable_state, facts_accepted, facts_dropped, facts_staged, last_sync_at, last_error, \
-                   created_at, updated_at",
+         RETURNING ",
+        connector_column_list!(),
     )
     .bind(now)
     .bind(now)
@@ -325,7 +336,7 @@ pub async fn set_connector_status(
     // Single UPDATE with a CASE expression that conditionally updates last_error
     // based on the discriminant. Bind order: status_id, discriminant, error_msg,
     // updated_at, id.
-    let row = sqlx::query_as::<_, Connector>(
+    let row = connector_query_as!(
         "UPDATE connectors SET \
            status_id = ?, \
            last_error = CASE \
@@ -335,9 +346,8 @@ pub async fn set_connector_status(
            END, \
            updated_at = ? \
          WHERE id = ? \
-         RETURNING id, connector_type_id, slug, backend, display_name, config_json, \
-                   status_id, auth_state_id, sync_cursor, durable_state, facts_accepted, facts_dropped, facts_staged, last_sync_at, last_error, \
-                   created_at, updated_at",
+         RETURNING ",
+        connector_column_list!(),
     )
     .bind(status as i16)
     .bind(discriminant)
@@ -358,11 +368,10 @@ pub async fn set_auth_state(
     auth_state: ConnectorAuthState,
     now: DateTime<Utc>,
 ) -> Result<Connector, KnowledgeError> {
-    let row = sqlx::query_as::<_, Connector>(
+    let row = connector_query_as!(
         "UPDATE connectors SET auth_state_id = ?, updated_at = ? WHERE id = ? \
-         RETURNING id, connector_type_id, slug, backend, display_name, config_json, \
-                   status_id, auth_state_id, sync_cursor, durable_state, facts_accepted, facts_dropped, facts_staged, last_sync_at, last_error, \
-                   created_at, updated_at",
+         RETURNING ",
+        connector_column_list!(),
     )
     .bind(auth_state as i16)
     .bind(now)
@@ -381,11 +390,10 @@ pub async fn update_connector_config(
     config_json: &str,
     now: DateTime<Utc>,
 ) -> Result<Connector, KnowledgeError> {
-    let row = sqlx::query_as::<_, Connector>(
+    let row = connector_query_as!(
         "UPDATE connectors SET config_json = ?, updated_at = ? WHERE id = ? \
-         RETURNING id, connector_type_id, slug, backend, display_name, config_json, \
-                   status_id, auth_state_id, sync_cursor, durable_state, facts_accepted, facts_dropped, facts_staged, last_sync_at, last_error, \
-                   created_at, updated_at",
+         RETURNING ",
+        connector_column_list!(),
     )
     .bind(config_json)
     .bind(now)
@@ -508,5 +516,17 @@ pub async fn delete_connector(pool: &SqlitePool, id: i32) -> Result<(), Knowledg
         Err(KnowledgeError::ConnectorNotFound(id))
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    const EXPECTED_CONNECTOR_COLUMNS: &str = "id, connector_type_id, slug, backend, display_name, \
+         config_json, status_id, auth_state_id, sync_cursor, durable_state, facts_accepted, \
+         facts_dropped, facts_staged, last_sync_at, last_error, created_at, updated_at";
+
+    #[test]
+    fn connector_column_list_matches_model_and_table_contract() {
+        assert_eq!(connector_column_list!(), EXPECTED_CONNECTOR_COLUMNS);
     }
 }

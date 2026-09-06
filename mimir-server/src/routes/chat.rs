@@ -78,7 +78,7 @@ fn tool_call_event(name: &str, display_name: &str, result: &str) -> Event {
 /// condensed memory plus (when available) the upcoming-events section.
 ///
 /// Shared by the native chat routes and the OpenAI-compatible provider
-/// surface (issue #388).
+/// surface (issues #388 and #554).
 pub(crate) async fn build_memory_context(state: &Arc<AppState>) -> String {
     compose_memory_view(state)
         .await

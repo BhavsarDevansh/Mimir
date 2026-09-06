@@ -14,7 +14,7 @@ The view carries the condensed core memory, the freshly rendered upcoming sectio
 
 ## Degradation And Rendering Policies
 
-`Full` rendering preserves all content for user inspection, including the normal `No stable memory yet.` fallback. `Budgeted` rendering returns an empty prompt-memory block when there is no core memory and truncates upcoming content to fit the configured character limit. A disabled memory subsystem or an unresolved user identity is represented with warnings and degraded upcoming availability rather than being silently folded into an empty string. Condensed-memory database failures remain an error at the `/memory` transport boundary while `/status` reports the degraded state as empty memory metrics.
+`Full` rendering preserves all content for user inspection, including the normal `No stable memory yet.` fallback. `Budgeted` rendering returns an empty prompt-memory block when there is no core memory and truncates upcoming content to fit the configured character limit. A disabled memory subsystem or an unresolved user identity is represented with warnings and degraded upcoming availability rather than being silently folded into an empty string. Condensed-memory database failures remain an error at the `/memory` transport boundary while `/status` continues to report any available upcoming memory consistently with its usage metrics.
 
 ## System Connections
 

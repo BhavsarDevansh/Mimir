@@ -54,6 +54,8 @@ pub enum MemoryProvenanceState {
 pub enum MemoryPrivacyState {
     /// Privacy redaction has not been evaluated at view level.
     NotEvaluated,
+    /// Sensitive content has been evaluated and needs no redaction.
+    Clean,
     /// Sensitive content has been redacted.
     Redacted,
 }
@@ -112,7 +114,7 @@ pub struct ComposedMemoryView {
     pub temporal_horizon_days: u8,
     /// Configured maximum Unicode scalar values for prompt memory.
     pub char_limit: usize,
-    /// Whether the core-memory query was enabled and completed.
+    /// Whether condensed-memory loading was enabled and completed.
     pub core_available: bool,
     /// Whether core-memory loading failed.
     pub core_degraded: bool,
@@ -150,11 +152,7 @@ impl ComposedMemoryView {
                     return String::new();
                 };
                 let upcoming = self.upcoming.as_deref().unwrap_or("");
-                let content = if upcoming.is_empty() {
-                    core.to_string()
-                } else {
-                    format!("{core}\n\n{upcoming}")
-                };
+                let content = combine_core_and_upcoming(core, upcoming);
                 truncate_to_budget(&content, self.char_limit)
             }
         }

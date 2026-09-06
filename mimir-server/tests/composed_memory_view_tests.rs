@@ -3,7 +3,7 @@ mod common;
 use common::*;
 use mimir_knowledge::models::fact::NewFact;
 use mimir_knowledge::models::source::SourceType;
-use mimir_server::memory_view::{BudgetPolicy, compose_memory_view};
+use mimir_server::memory_view::{BudgetPolicy, MemoryPrivacyState, compose_memory_view};
 
 #[tokio::test]
 async fn composed_view_exposes_core_upcoming_and_budget_metadata() {
@@ -26,6 +26,7 @@ async fn composed_view_exposes_core_upcoming_and_budget_metadata() {
     assert!(!view.upcoming_degraded);
     assert_eq!(view.temporal_horizon_days, 30);
     assert_eq!(view.char_limit, 2500);
+    assert_eq!(view.states.privacy, MemoryPrivacyState::NotEvaluated);
     assert_eq!(view.usage.char_count, view.content().chars().count());
     assert!(view.warnings.is_empty());
 }

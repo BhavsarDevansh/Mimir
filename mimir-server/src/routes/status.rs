@@ -24,13 +24,8 @@ pub async fn status_handler(State(state): State<Arc<AppState>>) -> Json<StatusRe
     };
 
     let view = compose_memory_view(&state).await;
-    let memory_text = if view.core_degraded {
-        String::new()
-    } else {
-        view.content()
-    };
     let memory_chars = view.usage.char_count;
-    let memory_exists = !memory_text.is_empty();
+    let memory_exists = memory_chars > 0;
     let memory_limit = view.usage.char_limit;
     let memory_usage_pct = view.usage.usage_percent;
 

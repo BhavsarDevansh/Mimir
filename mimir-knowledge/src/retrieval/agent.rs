@@ -224,7 +224,7 @@ impl RetrievalAgent {
         let query = if salient.is_empty() {
             task.to_string()
         } else {
-            salient.join(" OR ")
+            salient.join(" ")
         };
         steps.push(RetrievalStep::ConversationSearch {
             query,
@@ -762,8 +762,9 @@ mod tests {
     #[test]
     fn plan_initial_steps_conversation_query_relaxes_to_or() {
         // An ordinary natural-language task must not become one all-token
-        // AND query; only salient terms are OR-joined so filler words
-        // cannot force the match.
+        // AND query; only salient terms are passed as space-separated
+        // tokens so filler words cannot force the match. The conversation
+        // tool supplies FTS5 OR semantics for `match_any`.
         let steps =
             RetrievalAgent::plan_initial_steps("Find Mary's food preferences and any allergies");
         let (query, match_any) = match steps.last().unwrap() {
@@ -771,7 +772,12 @@ mod tests {
             _ => panic!("expected conversation step"),
         };
         assert!(match_any);
-        assert_eq!(query, "Mary OR food OR preferences OR allergies");
+        assert_eq!(query, "Mary food preferences allergies");
+        assert!(
+            !query
+                .split(' ')
+                .any(|token| token.eq_ignore_ascii_case("or"))
+        );
     }
 
     #[test]
@@ -784,7 +790,7 @@ mod tests {
             RetrievalStep::ConversationSearch { query, .. } => query.clone(),
             _ => panic!("expected conversation step"),
         };
-        assert_eq!(query.split(" OR ").count(), MAX_SALIENT_TOKENS);
+        assert_eq!(query.split(' ').count(), MAX_SALIENT_TOKENS);
     }
 
     #[test]

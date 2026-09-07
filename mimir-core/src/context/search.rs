@@ -2,7 +2,7 @@
 
 use crate::context::ContextManager;
 use crate::context::{ContextError, MessageSearchResult};
-use crate::fts5::escape_fts5_tokens;
+use crate::fts5::{escape_fts5_any_tokens, escape_fts5_tokens};
 use sqlx::QueryBuilder;
 use sqlx::Row;
 
@@ -10,13 +10,23 @@ use sqlx::Row;
 const SNIPPET_SIDE_TOKENS: usize = 30;
 
 impl ContextManager {
+    /// Search conversation messages with FTS5.
+    ///
+    /// With `match_any: false` every term must match (AND, in any order);
+    /// with `match_any: true` a match on any single term is sufficient (OR),
+    /// which relaxes precision in favour of recall for salient-term queries.
     pub async fn search_messages(
         &self,
         query: &str,
         limit: usize,
         session_id: Option<i64>,
+        match_any: bool,
     ) -> Result<Vec<MessageSearchResult>, ContextError> {
-        let safe_query = escape_fts5_tokens(query);
+        let safe_query = if match_any {
+            escape_fts5_any_tokens(query)
+        } else {
+            escape_fts5_tokens(query)
+        };
         if safe_query.is_empty() {
             return Ok(Vec::new());
         }

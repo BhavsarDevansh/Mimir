@@ -473,7 +473,7 @@ async fn schema_migration_text_to_integer() {
     assert!(msgs.iter().any(|m| m.content == "hello world"));
 
     // Verify search works on migrated data.
-    let results = mgr.search_messages("hello", 10, None).await.unwrap();
+    let results = mgr.search_messages("hello", 10, None, false).await.unwrap();
     assert!(!results.is_empty());
     assert!(results.iter().any(|r| r.snippet.contains("hello")));
 }
@@ -489,7 +489,7 @@ async fn search_messages_basic() {
         .await
         .unwrap();
 
-    let results = mgr.search_messages("fox", 10, None).await.unwrap();
+    let results = mgr.search_messages("fox", 10, None, false).await.unwrap();
     assert!(!results.is_empty());
     assert!(results.iter().any(|r| r.snippet.contains("<<<fox>>>")));
 }
@@ -507,7 +507,10 @@ async fn search_messages_session_filter() {
         .await
         .unwrap();
 
-    let results = mgr.search_messages("alpha", 10, Some(sid1)).await.unwrap();
+    let results = mgr
+        .search_messages("alpha", 10, Some(sid1), false)
+        .await
+        .unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].session_id, sid1);
 }
@@ -523,8 +526,11 @@ async fn search_messages_filtered_and_unfiltered_agree() {
         .await
         .unwrap();
 
-    let unfiltered = mgr.search_messages("fox", 10, None).await.unwrap();
-    let filtered = mgr.search_messages("fox", 10, Some(sid)).await.unwrap();
+    let unfiltered = mgr.search_messages("fox", 10, None, false).await.unwrap();
+    let filtered = mgr
+        .search_messages("fox", 10, Some(sid), false)
+        .await
+        .unwrap();
 
     // The session-filtered and unfiltered paths share one query shape; any
     // drift between them must fail here rather than only in review.
@@ -549,10 +555,37 @@ async fn search_messages_no_results() {
     mgr.add_user_message(sid, "hello world").await.unwrap();
 
     let results = mgr
-        .search_messages("xyznonsense123", 10, None)
+        .search_messages("xyznonsense123", 10, None, false)
         .await
         .unwrap();
     assert!(results.is_empty());
+}
+
+#[tokio::test]
+async fn search_messages_match_any_relaxes_to_or() {
+    let (mgr, _dir) = setup_manager().await;
+    let sid = mgr.create_session("sys").await.unwrap();
+    mgr.add_user_message(sid, "Mary is allergic to shellfish")
+        .await
+        .unwrap();
+    mgr.add_assistant_message(sid, "the meeting is at noon")
+        .await
+        .unwrap();
+
+    // Issue follow-up to #493: OR matching must surface a message that
+    // contains only one of the salient terms, which the strict all-terms
+    // AND mode rejects.
+    let results = mgr
+        .search_messages("mary OR groceries", 10, None, true)
+        .await
+        .unwrap();
+    assert!(results.iter().any(|r| r.snippet.contains("allergic")));
+
+    let strict = mgr
+        .search_messages("mary OR groceries", 10, None, false)
+        .await
+        .unwrap();
+    assert!(strict.is_empty());
 }
 
 #[tokio::test]
@@ -569,7 +602,10 @@ async fn search_messages_matches_terms_in_any_order() {
 
     // "fox dog" must match messages containing both terms in any order; the
     // "fox only" message lacks "dog" and must not match.
-    let results = mgr.search_messages("fox dog", 10, None).await.unwrap();
+    let results = mgr
+        .search_messages("fox dog", 10, None, false)
+        .await
+        .unwrap();
     assert!(results.iter().any(|r| r.snippet.contains("quick brown")));
     assert!(results.iter().any(|r| r.snippet.contains("jumps over")));
     assert!(results.iter().all(|r| !r.snippet.contains("fox only")));
@@ -592,7 +628,7 @@ async fn search_messages_token_and_not_phrase() {
     // Issue #493: "check in time" must match both messages that contain all
     // three terms in any order, and must not match the message missing "in".
     let results = mgr
-        .search_messages("check in time", 10, None)
+        .search_messages("check in time", 10, None, false)
         .await
         .unwrap();
     assert_eq!(results.len(), 2);
@@ -615,7 +651,7 @@ async fn search_messages_quoted_query_requires_exact_phrase() {
     // containing the contiguous phrase matches, even though both messages
     // contain all three terms.
     let results = mgr
-        .search_messages("\"check in time\"", 10, None)
+        .search_messages("\"check in time\"", 10, None, false)
         .await
         .unwrap();
     assert_eq!(results.len(), 1);
@@ -636,7 +672,7 @@ async fn search_messages_hyphen_and_compound_forms_surface_hotel_context() {
     // "check in", "check-in" and "checkin" must all surface the hotel booking
     // context (the FTS5 tokenizer indexes "check-in" as "check" + "in").
     for query in ["check in", "check-in", "checkin"] {
-        let results = mgr.search_messages(query, 10, None).await.unwrap();
+        let results = mgr.search_messages(query, 10, None, false).await.unwrap();
         assert!(
             results.iter().any(|r| r.snippet.contains("hotel")),
             "query {query:?} should surface the hotel context"
@@ -645,13 +681,16 @@ async fn search_messages_hyphen_and_compound_forms_surface_hotel_context() {
 
     // The compound form "checkin" is a single token, so it cannot match the
     // housing heading at all — the false positive from issue #493.
-    let results = mgr.search_messages("checkin", 10, None).await.unwrap();
+    let results = mgr
+        .search_messages("checkin", 10, None, false)
+        .await
+        .unwrap();
     assert!(results.iter().all(|r| !r.snippet.contains("Landlord")));
 
     // The full query distinguishes the hotel booking from the housing heading:
     // the heading lacks "time", so AND semantics exclude it.
     let results = mgr
-        .search_messages("check in time", 10, None)
+        .search_messages("check in time", 10, None, false)
         .await
         .unwrap();
     assert!(results.iter().any(|r| r.snippet.contains("hotel")));
@@ -670,7 +709,10 @@ async fn search_messages_snippet_window_surfaces_context_around_hit() {
     let long = format!("{} needle {}", before.join(" "), after.join(" "));
     mgr.add_user_message(sid, &long).await.unwrap();
 
-    let results = mgr.search_messages("needle", 10, None).await.unwrap();
+    let results = mgr
+        .search_messages("needle", 10, None, false)
+        .await
+        .unwrap();
     assert_eq!(results.len(), 1);
     assert!(results[0].snippet.contains("<<<needle>>>"));
     // word35 sits 25 tokens before the hit: visible with a 30-token window,

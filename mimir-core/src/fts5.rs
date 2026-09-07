@@ -37,6 +37,25 @@ pub fn escape_fts5(query: &str) -> String {
 /// Whitespace-only and separator-only inputs are returned as empty strings to
 /// avoid overly broad matches.
 pub fn escape_fts5_tokens(query: &str) -> String {
+    join_quoted_tokens(query, " AND ")
+}
+
+/// Like [`escape_fts5_tokens`], but joins the quoted tokens with ` OR ` so a
+/// match on any single term is sufficient.
+///
+/// Relaxed OR matching trades precision for recall: a message only needs to
+/// contain one salient term (for example "Mary" or "allergies") to surface,
+/// which keeps natural-language research tasks from failing when stored
+/// messages never contain every filler word of the task. The whole-query
+/// quoted-phrase fallback and operator neutralisation behave exactly as in
+/// [`escape_fts5_tokens`].
+pub fn escape_fts5_any_tokens(query: &str) -> String {
+    join_quoted_tokens(query, " OR ")
+}
+
+/// Shared implementation for [`escape_fts5_tokens`] and
+/// [`escape_fts5_any_tokens`]: quote each token and join with `operator`.
+fn join_quoted_tokens(query: &str, operator: &str) -> String {
     let trimmed = query.trim();
     if trimmed.is_empty() {
         return String::new();
@@ -64,12 +83,12 @@ pub fn escape_fts5_tokens(query: &str) -> String {
     if tokens.is_empty() {
         return String::new();
     }
-    tokens.join(" AND ")
+    tokens.join(operator)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{escape_fts5, escape_fts5_tokens};
+    use super::{escape_fts5, escape_fts5_any_tokens, escape_fts5_tokens};
 
     #[test]
     fn escape_fts5_empty() {
@@ -145,6 +164,36 @@ mod tests {
             escape_fts5_tokens("check in time"),
             "\"check\" AND \"in\" AND \"time\""
         );
+    }
+
+    #[test]
+    fn escape_fts5_any_tokens_or_joins_terms() {
+        assert_eq!(
+            escape_fts5_any_tokens("Mary food allergies"),
+            "\"Mary\" OR \"food\" OR \"allergies\""
+        );
+    }
+
+    #[test]
+    fn escape_fts5_any_tokens_neutralises_operators() {
+        assert_eq!(
+            escape_fts5_any_tokens("foo OR bar"),
+            "\"foo\" OR \"OR\" OR \"bar\""
+        );
+    }
+
+    #[test]
+    fn escape_fts5_any_tokens_quoted_query_keeps_phrase() {
+        assert_eq!(
+            escape_fts5_any_tokens("\"check in time\""),
+            "\"check in time\""
+        );
+    }
+
+    #[test]
+    fn escape_fts5_any_tokens_empty_and_whitespace() {
+        assert_eq!(escape_fts5_any_tokens(""), "");
+        assert_eq!(escape_fts5_any_tokens("   "), "");
     }
 
     #[test]

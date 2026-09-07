@@ -27,10 +27,88 @@ fn same_text(left: &str, right: &str) -> bool {
         .eq(right.chars().flat_map(char::to_lowercase))
 }
 
+/// Upper bounds that keep a single retrieval task from fanning out into an
+/// unbounded number of concurrent database queries and allocations. They keep
+/// performance and security central: an adversarial or accidental long task
+/// degrades into a bounded plan instead of thousands of concurrent lookups.
+/// Maximum characters of the task considered during planning.
+const MAX_TASK_CHARS: usize = 2_000;
+/// Maximum distinct `kg_search` steps planned for one retrieval task.
+const MAX_TOKEN_STEPS: usize = 16;
+/// Maximum distinct candidate entities that receive `kg_query`/`kg_related`
+/// follow-up steps.
+const MAX_CANDIDATES: usize = 12;
+/// Maximum salient tokens OR-joined into the conversation query.
+const MAX_SALIENT_TOKENS: usize = 8;
+/// Maximum retrieval steps executed concurrently.
+const MAX_CONCURRENCY: usize = 8;
+/// Facts requested per `kg_query` page (the tool clamps `limit` to 50).
+const KG_QUERY_PAGE_SIZE: i64 = 50;
+/// Maximum `kg_query` pages fetched per candidate, bounding facts per
+/// candidate at `KG_QUERY_PAGE_SIZE * MAX_KG_QUERY_PAGES`.
+const MAX_KG_QUERY_PAGES: usize = 4;
+
+/// Filler words excluded from the salient-term conversation query. They
+/// rarely identify conversation evidence on their own and would otherwise
+/// dominate relaxed OR matching.
+const STOP_WORDS: &[&str] = &[
+    "a", "all", "also", "an", "and", "any", "are", "as", "at", "be", "been", "but", "by", "can",
+    "could", "did", "do", "does", "find", "for", "from", "get", "give", "had", "has", "have",
+    "her", "him", "his", "how", "i", "if", "in", "into", "is", "it", "its", "just", "know", "look",
+    "may", "me", "might", "must", "my", "need", "no", "not", "now", "of", "on", "or", "our", "out",
+    "over", "please", "shall", "she", "so", "some", "tell", "than", "that", "the", "their", "them",
+    "then", "there", "these", "they", "this", "those", "to", "too", "under", "up", "was", "we",
+    "were", "what", "when", "where", "which", "who", "whom", "why", "will", "with", "would", "you",
+    "your",
+];
+
+/// Replace case-insensitive possessive suffixes ('s, ’s) with a space
+/// so they never survive tokenisation as a junk `S` search token, regardless
+/// of the surrounding letter casing (`JAMES'S`, `James’s`, ...).
+fn strip_possessives(task: &str) -> String {
+    let mut out = String::with_capacity(task.len());
+    let mut characters = task.chars().peekable();
+    while let Some(character) = characters.next() {
+        if (character == '\'' || character == '\u{2019}')
+            && matches!(characters.peek(), Some('s') | Some('S'))
+        {
+            characters.next();
+            out.push(' ');
+        } else {
+            out.push(character);
+        }
+    }
+    out
+}
+
+/// Extract distinct salient terms for the relaxed conversation query:
+/// tokens of at least two characters that are not filler words, deduplicated
+/// case-insensitively and capped.
+fn salient_tokens(task: &str) -> Vec<String> {
+    let mut tokens: Vec<String> = Vec::new();
+    for token in task.split(|character: char| !character.is_alphanumeric()) {
+        if token.chars().count() < 2 {
+            continue;
+        }
+        let lowercased: String = token.chars().flat_map(char::to_lowercase).collect();
+        if STOP_WORDS.contains(&lowercased.as_str()) {
+            continue;
+        }
+        if tokens.iter().any(|existing| same_text(existing, token)) {
+            continue;
+        }
+        tokens.push(token.to_string());
+        if tokens.len() >= MAX_SALIENT_TOKENS {
+            break;
+        }
+    }
+    tokens
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum RetrievalStep {
     KgSearch { query: String },
-    ConversationSearch { query: String },
+    ConversationSearch { query: String, match_any: bool },
     KgQuery { entity_name: String },
     KgRelated { entity_name: String },
 }
@@ -76,6 +154,13 @@ impl RetrievalAgent {
         if task.is_empty() {
             return Err(RetrievalAgentError::EmptyTask);
         }
+        if task.len() > MAX_TASK_CHARS {
+            warn!(
+                length = task.len(),
+                cap = MAX_TASK_CHARS,
+                "truncating retrieval task for planning"
+            );
+        }
 
         let initial_steps = Self::plan_initial_steps(task);
         let initial_results = self.execute_steps(&initial_steps).await;
@@ -97,6 +182,8 @@ impl RetrievalAgent {
             Self::record_step(tool_name, result, &mut context);
         }
 
+        // The planning caps bound the plan at
+        // MAX_TOKEN_STEPS + 1 + 2 * MAX_CANDIDATES steps, far below u16::MAX.
         context.steps_executed =
             u16::try_from(initial_steps.len() + follow_up_steps.len()).unwrap_or(u16::MAX);
         context.finish_reason = Some("completed".to_string());
@@ -107,14 +194,16 @@ impl RetrievalAgent {
         Ok(context)
     }
 
-    /// Build the initial fixed plan: one entity search per task token and one
-    /// conversation search for the task.
+    /// Build the initial fixed plan: one entity search per distinct task
+    /// token (capped) and one salient-term conversation search.
     fn plan_initial_steps(task: &str) -> Vec<RetrievalStep> {
+        let task = Self::truncate_task(task);
+        let task_without_possessives = strip_possessives(task);
         let mut steps = Vec::new();
-        let task_without_possessives = task.replace("'s", " ").replace("’s", " ");
         for token in task_without_possessives.split(|character: char| !character.is_alphanumeric())
         {
             if token.is_empty()
+                || steps.len() >= MAX_TOKEN_STEPS
                 || steps.iter().any(|step| {
                     matches!(step, RetrievalStep::KgSearch { query }
                         if same_text(query, token))
@@ -126,16 +215,50 @@ impl RetrievalAgent {
                 query: token.to_string(),
             });
         }
+        // Relaxed OR matching over salient terms keeps conversation evidence
+        // reachable for ordinary natural-language tasks, which an all-token
+        // AND query would reject unless a stored message contains every
+        // filler word too. Tasks without any salient token fall back to the
+        // full task under the same relaxed mode.
+        let salient = salient_tokens(&task_without_possessives);
+        let query = if salient.is_empty() {
+            task.to_string()
+        } else {
+            salient.join(" OR ")
+        };
         steps.push(RetrievalStep::ConversationSearch {
-            query: task.to_string(),
+            query,
+            match_any: true,
         });
         steps
     }
 
-    /// Query facts and relationships once for every distinct search candidate.
+    /// Cap the task text consulted during planning so tokenisation and the
+    /// dedupe scans stay bounded regardless of the incoming task length.
+    fn truncate_task(task: &str) -> &str {
+        if task.len() <= MAX_TASK_CHARS {
+            return task;
+        }
+        let mut end = MAX_TASK_CHARS;
+        while end > 0 && !task.is_char_boundary(end) {
+            end -= 1;
+        }
+        &task[..end]
+    }
+
+    /// Query facts and relationships once for every distinct search
+    /// candidate, capped so a wide search cannot fan out unbounded.
     fn plan_follow_up_steps(candidates: &[String]) -> Vec<RetrievalStep> {
+        if candidates.len() > MAX_CANDIDATES {
+            warn!(
+                candidates = candidates.len(),
+                cap = MAX_CANDIDATES,
+                "capping retrieval follow-up candidates"
+            );
+        }
         candidates
             .iter()
+            .take(MAX_CANDIDATES)
             .flat_map(|entity_name| {
                 [
                     RetrievalStep::KgQuery {
@@ -175,15 +298,26 @@ impl RetrievalAgent {
         }
     }
 
-    /// Execute every step concurrently. Tool failures are logged and omitted
-    /// from accumulated context, but never prevent other steps from running.
+    /// Execute every step with bounded concurrency. Tool failures are logged
+    /// and omitted from accumulated context, but never prevent other steps
+    /// from running.
     async fn execute_steps(
         &self,
         steps: &[RetrievalStep],
     ) -> Vec<(&'static str, Result<ToolOutput, ToolError>)> {
-        let futures = steps.iter().map(|step| self.execute_step(step));
-        let results = join_all(futures).await;
-        debug!(steps = steps.len(), "executed retrieval steps");
+        // Fixed-size chunks keep at most `MAX_CONCURRENCY` futures in flight,
+        // so a long plan cannot launch every database query at once, while
+        // `join_all` per chunk keeps results aligned with their steps.
+        let mut results = Vec::with_capacity(steps.len());
+        for chunk in steps.chunks(MAX_CONCURRENCY) {
+            let futures = chunk.iter().map(|step| self.execute_step(step));
+            results.extend(join_all(futures).await);
+        }
+        debug!(
+            steps = steps.len(),
+            concurrent = MAX_CONCURRENCY,
+            "executed retrieval steps"
+        );
         results
     }
 
@@ -234,15 +368,17 @@ impl RetrievalAgent {
                     .execute(serde_json::json!({"query": query, "limit": 10}))
                     .await
             }
-            RetrievalStep::ConversationSearch { query } => {
+            RetrievalStep::ConversationSearch { query, match_any } => {
                 self.conversation_search
-                    .execute(serde_json::json!({"query": query, "limit": 20}))
+                    .execute(serde_json::json!({
+                        "query": query,
+                        "limit": 20,
+                        "match_any": match_any
+                    }))
                     .await
             }
             RetrievalStep::KgQuery { entity_name } => {
-                self.kg_query
-                    .execute(serde_json::json!({"entity_name": entity_name}))
-                    .await
+                Self::execute_kg_query(&self.kg_query, entity_name).await
             }
             RetrievalStep::KgRelated { entity_name } => {
                 self.kg_related
@@ -250,6 +386,87 @@ impl RetrievalAgent {
                     .await
             }
         }
+    }
+
+    /// Fetch a candidate's facts with pagination so nothing is silently
+    /// truncated, bounded by `MAX_KG_QUERY_PAGES` pages of
+    /// `KG_QUERY_PAGE_SIZE`. When facts remain beyond the final page the
+    /// merged output carries `"truncated": true` and the truncation is
+    /// logged, surfacing the deterministic cap instead of hiding it.
+    async fn execute_kg_query(
+        kg_query: &KgQueryTool,
+        entity_name: &str,
+    ) -> Result<ToolOutput, ToolError> {
+        let mut facts: Vec<Value> = Vec::new();
+        let mut entity: Option<Value> = None;
+        let mut total = 0usize;
+        let mut truncated = false;
+        for page in 0..MAX_KG_QUERY_PAGES {
+            let offset = (page as i64) * KG_QUERY_PAGE_SIZE;
+            let output = match kg_query
+                .execute(serde_json::json!({
+                    "entity_name": entity_name,
+                    "offset": offset,
+                    "limit": KG_QUERY_PAGE_SIZE
+                }))
+                .await
+            {
+                Ok(output) => output,
+                Err(error) => {
+                    if facts.is_empty() {
+                        return Err(error);
+                    }
+                    warn!(
+                        entity = entity_name,
+                        fetched = facts.len(),
+                        "kg_query pagination stopped early after tool failure"
+                    );
+                    truncated = true;
+                    break;
+                }
+            };
+            let Some(value) = output.result else {
+                if facts.is_empty() {
+                    return Ok(output);
+                }
+                break;
+            };
+            if entity.is_none() {
+                entity = value.get("entity").cloned();
+            }
+            if let Some(page_facts) = value.get("facts").and_then(Value::as_array) {
+                facts.extend(page_facts.iter().cloned());
+            }
+            total = value
+                .get("total")
+                .and_then(Value::as_u64)
+                .map(|t| t as usize)
+                .unwrap_or(total);
+            if facts.len() >= total {
+                break;
+            }
+        }
+        if facts.len() < total {
+            truncated = true;
+            warn!(
+                entity = entity_name,
+                total = total,
+                fetched = facts.len(),
+                "kg_query facts deterministically truncated"
+            );
+        }
+        let result = serde_json::json!({
+            "entity": entity.unwrap_or(Value::Null),
+            "facts": facts,
+            "total": total,
+            "offset": 0,
+            "limit": facts.len() as i64,
+            "truncated": truncated
+        });
+        Ok(ToolOutput {
+            result: Some(result),
+            ..Default::default()
+        })
     }
 
     fn record_step(
@@ -502,10 +719,119 @@ mod tests {
                     query: "Mary".to_string(),
                 },
                 RetrievalStep::ConversationSearch {
-                    query: "Mary mary's Mary".to_string(),
+                    query: "Mary".to_string(),
+                    match_any: true,
                 },
             ]
         );
+    }
+
+    #[test]
+    fn plan_initial_steps_strips_uppercase_possessives() {
+        // Both quote styles must be stripped regardless of letter casing so
+        // no junk `S` token is planned.
+        let steps = RetrievalAgent::plan_initial_steps("JAMES'S JAMES\u{2019}S");
+        assert_eq!(steps.len(), 2);
+        assert!(
+            steps.iter().any(|step| {
+                matches!(step, RetrievalStep::KgSearch { query } if query == "JAMES")
+            })
+        );
+        assert!(steps.iter().all(|step| !matches!(
+            step,
+            RetrievalStep::KgSearch { query } if same_text(query, "s")
+        )));
+    }
+
+    #[test]
+    fn plan_initial_steps_caps_token_steps() {
+        let task = (0..40)
+            .map(|i| format!("entity{i}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let steps = RetrievalAgent::plan_initial_steps(&task);
+        // One `kg_search` per distinct token up to the cap, plus one
+        // conversation search.
+        assert_eq!(steps.len(), MAX_TOKEN_STEPS + 1);
+        assert!(matches!(
+            steps.last(),
+            Some(RetrievalStep::ConversationSearch { .. })
+        ));
+    }
+
+    #[test]
+    fn plan_initial_steps_conversation_query_relaxes_to_or() {
+        // An ordinary natural-language task must not become one all-token
+        // AND query; only salient terms are OR-joined so filler words
+        // cannot force the match.
+        let steps =
+            RetrievalAgent::plan_initial_steps("Find Mary's food preferences and any allergies");
+        let (query, match_any) = match steps.last().unwrap() {
+            RetrievalStep::ConversationSearch { query, match_any } => (query.clone(), match_any),
+            _ => panic!("expected conversation step"),
+        };
+        assert!(match_any);
+        assert_eq!(query, "Mary OR food OR preferences OR allergies");
+    }
+
+    #[test]
+    fn plan_initial_steps_conversation_caps_salient_tokens() {
+        let task = (0..30)
+            .map(|i| format!("topic{i}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let query = match steps_last(&task) {
+            RetrievalStep::ConversationSearch { query, .. } => query.clone(),
+            _ => panic!("expected conversation step"),
+        };
+        assert_eq!(query.split(" OR ").count(), MAX_SALIENT_TOKENS);
+    }
+
+    #[test]
+    fn plan_initial_steps_conversation_falls_back_to_full_task() {
+        // Without any salient token the full task is searched, still under
+        // relaxed OR matching so it cannot silently require every word.
+        let (query, match_any) = match steps_last("a of the") {
+            RetrievalStep::ConversationSearch { query, match_any } => (query.clone(), match_any),
+            _ => panic!("expected conversation step"),
+        };
+        assert!(match_any);
+        assert_eq!(query, "a of the");
+    }
+
+    #[test]
+    fn plan_follow_up_steps_caps_candidates() {
+        let candidates = (0..30).map(|i| format!("Entity{i}")).collect::<Vec<_>>();
+        let steps = RetrievalAgent::plan_follow_up_steps(&candidates);
+        assert_eq!(steps.len(), MAX_CANDIDATES * 2);
+        assert!(steps.iter().all(|step| matches!(
+            step,
+            RetrievalStep::KgQuery { .. } | RetrievalStep::KgRelated { .. }
+        )));
+    }
+
+    #[test]
+    fn truncate_task_caps_and_keeps_char_boundaries() {
+        assert_eq!(RetrievalAgent::truncate_task("short"), "short");
+        let long = "\u{e9}".repeat(MAX_TASK_CHARS); // 2-byte characters
+        let truncated = RetrievalAgent::truncate_task(&long);
+        assert!(truncated.len() <= MAX_TASK_CHARS);
+        assert!(truncated.is_char_boundary(truncated.len()));
+        assert!(long.starts_with(truncated));
+    }
+
+    #[test]
+    fn strip_possessives_handles_both_quotes_and_cases() {
+        assert_eq!(strip_possessives("James's car"), "James  car");
+        assert_eq!(strip_possessives("JAMES\u{2019}S car"), "JAMES  car");
+        assert_eq!(strip_possessives("it's-its"), "it -its");
+        assert_eq!(strip_possessives("class of 1999"), "class of 1999");
+    }
+
+    /// Last planned step (always the conversation search).
+    fn steps_last(task: &str) -> RetrievalStep {
+        let steps = RetrievalAgent::plan_initial_steps(task);
+        steps.into_iter().last().unwrap()
     }
 
     #[test]

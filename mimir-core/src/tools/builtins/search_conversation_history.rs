@@ -37,7 +37,12 @@ impl Tool for SearchConversationHistoryTool {
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "The search query to look for in conversation history. All terms must match, in any order; wrap the whole query in double quotes to require an exact phrase."
+                    "description": "The search query to look for in conversation history. By default all terms must match, in any order; wrap the whole query in double quotes to require an exact phrase."
+                },
+                "match_any": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Relaxed matching: if true, a match on any single term is sufficient (OR) instead of requiring every term (AND). Default false."
                 },
                 "limit": {
                     "type": "integer",
@@ -70,10 +75,14 @@ impl Tool for SearchConversationHistoryTool {
         }
         let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
         let session_id = args.get("session_id").and_then(|v| v.as_i64());
+        let match_any = args
+            .get("match_any")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         let results = self
             .context_manager
-            .search_messages(query, limit, session_id)
+            .search_messages(query, limit, session_id, match_any)
             .await
             .map_err(|e| ToolError::execution_failed(self.name(), e.to_string()))?;
 

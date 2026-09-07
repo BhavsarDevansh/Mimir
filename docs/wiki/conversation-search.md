@@ -18,11 +18,12 @@ During a chat, if the agent needs to recall something from a prior conversation,
 }
 ```
 
-- `query` — the terms to search for; every term must match, in any order (wrap the whole query in double quotes to require an exact phrase).
+- `query` — the terms to search for; by default every term must match, in any order (wrap the whole query in double quotes to require an exact phrase).
+- `match_any` — optional relaxed matching; with `"match_any": true` a match on any single term is sufficient instead of requiring every term. Use it when recall matters more than precision, for example when searching with a handful of salient keywords from a longer task.
 - `limit` — max results (default 5, max 20).
 - `session_id` — optional; restricts search to a single conversation.
 
-If `session_id` is omitted, all conversations are searched. Multi-word queries use AND semantics: `check in time` matches any message containing `check`, `in`, and `time` in any order, so a message like "time to check in" is found even though the exact phrase never appears. Hyphenated words are split like the FTS5 tokenizer splits them, so `check-in` and `check in` are equivalent. Pass the whole query wrapped in double quotes (`"check in time"`) to require the exact phrase instead.
+If `session_id` is omitted, all conversations are searched. By default, multi-word queries use AND semantics: `check in time` matches any message containing `check`, `in`, and `time` in any order, so a message like "time to check in" is found even though the exact phrase never appears. Hyphenated words are split like the FTS5 tokenizer splits them, so `check-in` and `check in` are equivalent. Pass the whole query wrapped in double quotes (`"check in time"`) to require the exact phrase instead.
 
 ## Result Format
 

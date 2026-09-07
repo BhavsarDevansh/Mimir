@@ -1441,7 +1441,6 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("preset-target.txt");
-        let alternate_target = dir.path().join("preset-target-two.txt");
         let link = dir.path().join("cheerful.personality.md");
         fs::write(&target, "Version one").unwrap();
         File::options()
@@ -1456,19 +1455,24 @@ mod tests {
         let first = cache.resolve_from_path(dir.path(), "cheerful");
         assert!(first.system_prompt("").starts_with("Version one"));
 
-        // Same-length rewrite through a swapped target: the cache must track
-        // the target's metadata, not the symlink's.
-        fs::write(&alternate_target, "Version two").unwrap();
+        let directory_modified = fs::metadata(dir.path()).unwrap().modified().unwrap();
+
+        // Same-length rewrite of the linked target: the cache must track the
+        // target's metadata, not the symlink's. Modifying the target in place
+        // also keeps the watched presets directory metadata unchanged.
+        fs::write(&target, "Version two").unwrap();
         File::options()
             .write(true)
-            .open(&alternate_target)
+            .open(&target)
             .unwrap()
             .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1))
             .unwrap();
-        fs::remove_file(&link).unwrap();
-        symlink(&alternate_target, &link).unwrap();
         let second = cache.resolve_from_path(dir.path(), "cheerful");
         assert!(second.system_prompt("").starts_with("Version two"));
+        assert_eq!(
+            fs::metadata(dir.path()).unwrap().modified().unwrap(),
+            directory_modified
+        );
         assert_eq!(cache.scan_count(), 2);
     }
 

@@ -1,7 +1,7 @@
-//! Data types for agentic context retrieval.
+//! Data types for deterministic context retrieval.
 //!
-//! `RetrievedContext` is the structured output of the RetrievalAgent,
-//! consumed by the main LLM after the internal research phase completes.
+//! `RetrievedContext` is the structured output of deterministic retrieval,
+//! consumed by the main LLM after the research phase completes.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -16,10 +16,10 @@ pub struct RetrievedContext {
     pub relations: Vec<RetrievedRelation>,
     /// Relevant snippets from past conversations.
     pub conversation_snippets: Vec<ConversationSnippet>,
-    /// Optional high-level summary of why the agent finished.
+    /// High-level summary of why deterministic retrieval finished.
     pub finish_reason: Option<String>,
-    /// Number of internal tool-call rounds consumed.
-    pub rounds_used: u16,
+    /// Number of deterministic retrieval steps executed.
+    pub steps_executed: u16,
 }
 
 impl RetrievedContext {
@@ -138,7 +138,7 @@ mod tests {
                 created_at: Utc::now(),
             }],
             finish_reason: None,
-            rounds_used: 3,
+            steps_executed: 3,
         };
         assert_eq!(
             ctx.summary(),
@@ -216,7 +216,7 @@ mod tests {
             relations: vec![],
             conversation_snippets: vec![],
             finish_reason: Some("done".to_string()),
-            rounds_used: 2,
+            steps_executed: 2,
         };
         let json = serde_json::to_string(&ctx).unwrap();
         let back: RetrievedContext = serde_json::from_str(&json).unwrap();

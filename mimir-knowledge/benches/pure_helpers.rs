@@ -112,7 +112,7 @@ fn bench_retrieval_summary(c: &mut Criterion) {
             .collect(),
         conversation_snippets: vec![],
         finish_reason: None,
-        rounds_used: 4,
+        steps_executed: 4,
     };
     c.bench_function("retrieval_context_summary", |b| {
         b.iter(|| black_box(ctx.summary()))

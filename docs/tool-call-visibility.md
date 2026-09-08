@@ -51,7 +51,7 @@ Tool calls are rendered in the CLI using `colored` crate with `.dimmed().italic(
 
 ### Nested Tool-Call Progress (retrieval agent)
 
-`retrieve_context` spawns a multi-round retrieval agent that can run for a minute or more. To keep the client from looking frozen behind a single "Retrieve Context…" indicator, the agent's individual sub-tool calls are streamed as the same `tool_call_start` / `tool_call` events:
+`retrieve_context` runs a deterministic research plan that may execute several database queries. To keep the client from looking frozen behind a single "Retrieve Context…" indicator, each retrieval step is streamed as the same `tool_call_start` / `tool_call` events:
 
 ```text
 🔧 Retrieve Context…
@@ -61,7 +61,7 @@ Tool calls are rendered in the CLI using `colored` crate with `.dimmed().italic(
 🔧 Kg Search → {"results":[...],...}
 ```
 
-Mechanically, the streaming chat handler creates a `tokio::sync::mpsc` progress channel per tool call and passes the sender through `ToolContext::with_progress` into the registry factory, which rebuilds `RetrieveContextTool` with it. The retrieval agent emits `mimir_core::tools::ToolProgress::Started` before each sub-tool executes and `ToolProgress::Finished` after, and a spawned forwarding task converts those into SSE `tool_call_start` / `tool_call` events (results truncated to 80 chars via `ToolCallInfo::truncate_result`). Non-streaming paths (`/chat`, `/v1/chat/completions`) pass no channel, so the agent's progress is only surfaced on `/chat/stream`.
+Mechanically, the streaming chat handler creates a `tokio::sync::mpsc` progress channel per tool call and passes the sender through `ToolContext::with_progress` into the registry factory, which rebuilds `RetrieveContextTool` with it. The retriever emits `mimir_core::tools::ToolProgress::Started` before each step executes and `ToolProgress::Finished` after, and a spawned forwarding task converts those into SSE `tool_call_start` / `tool_call` events (results truncated to 80 chars via `ToolCallInfo::truncate_result`). Non-streaming paths (`/chat`, `/v1/chat/completions`) pass no channel, so nested retrieval progress is only surfaced on `/chat/stream`.
 
 ### Streaming Timeouts
 

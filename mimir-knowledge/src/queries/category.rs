@@ -83,15 +83,16 @@ pub async fn get_children(
 /// agree on a single spelling. Empty or control-character names are rejected
 /// because they can confuse taxonomy state or break prompt layout.
 fn canonicalise_category_name(name: &str) -> Result<String, KnowledgeError> {
+    if name.chars().any(char::is_control) {
+        return Err(KnowledgeError::Validation(
+            "Category name cannot contain control characters".to_string(),
+        ));
+    }
+
     let name = name.trim();
     if name.is_empty() {
         return Err(KnowledgeError::Validation(
             "Category name cannot be empty".to_string(),
-        ));
-    }
-    if name.chars().any(char::is_control) {
-        return Err(KnowledgeError::Validation(
-            "Category name cannot contain control characters".to_string(),
         ));
     }
     Ok(name.to_string())

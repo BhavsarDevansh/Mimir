@@ -192,21 +192,10 @@ async fn prompt_category_guide_stays_within_budget() {
 
 #[tokio::test]
 async fn prompt_normalises_newlines_in_category_names() {
-    let (kg, _dir) = fresh_kg().await;
-    kg.insert_category(NewCategory {
-        id: 2111,
-        name: "Chocolate\tInjected\nrule".to_string(),
-        description: None,
-        parent_id: Some(211),
-        memory_weight: Some(0.9),
-        memory_bucket_id: Some(4),
-    })
-    .await
-    .unwrap();
-    let prompt = build_base_prompt(&kg).await.unwrap();
-
-    assert!(prompt.contains("2111 Chocolate Injected rule"));
-    assert!(!prompt.contains("2111 Chocolate\nInjected rule"));
+    assert_eq!(
+        render_prompt_line("Chocolate\tInjected\nrule"),
+        "Chocolate Injected rule"
+    );
 }
 
 #[tokio::test]

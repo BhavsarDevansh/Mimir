@@ -123,7 +123,7 @@ async fn prompt_renders_entire_assignable_category_tree() {
     let categories = kg.list_all_categories().await.unwrap();
 
     for category in categories {
-        if category.id == 0 {
+        if is_structural_category(&category) {
             continue;
         }
         assert!(prompt.contains(&format!("{} {}", category.id, category.name)));
@@ -151,8 +151,8 @@ async fn prompt_excludes_structural_root_from_category_guide() {
     let prompt = build_base_prompt(&kg).await.unwrap();
 
     let categories = kg.list_all_categories().await.unwrap();
-    assert!(categories.iter().any(|category| category.id == 0));
-    assert!(!prompt.contains("\n0 Root\n"));
+    assert!(categories.iter().any(is_structural_category));
+    assert!(!prompt.contains(&format!("\n{STRUCTURAL_CATEGORY_ID} Root\n")));
     assert!(prompt.contains("\n1 System & Meta\n"));
     assert!(prompt.contains("\n100 Identity & Biography\n"));
 }
@@ -163,12 +163,12 @@ async fn category_tree_apis_still_include_structural_root() {
     let categories = kg.list_all_categories().await.unwrap();
     let catalogue = kg.get_top_level_catalogue().await.unwrap();
 
-    assert!(categories.iter().any(|category| category.id == 0));
-    assert!(catalogue.iter().any(|category| category.id == 0));
+    assert!(categories.iter().any(is_structural_category));
+    assert!(catalogue.iter().any(is_structural_category));
 }
 
 #[tokio::test]
-async fn prompt_includes_assignable_root_categories() {
+async fn prompt_includes_top_level_assignable_categories() {
     let (kg, _dir) = fresh_kg().await;
     let category = NewCategory {
         id: 901,
@@ -182,6 +182,23 @@ async fn prompt_includes_assignable_root_categories() {
     let prompt = build_base_prompt(&kg).await.unwrap();
 
     assert!(prompt.contains("\n901 Custom Root\n"));
+}
+
+#[tokio::test]
+async fn prompt_treats_synthetic_root_children_as_top_level_assignable() {
+    let (kg, _dir) = fresh_kg().await;
+    let category = NewCategory {
+        id: 902,
+        name: "Custom Root Child".to_string(),
+        description: None,
+        parent_id: Some(STRUCTURAL_CATEGORY_ID),
+        memory_weight: Some(0.9),
+        memory_bucket_id: Some(4),
+    };
+    kg.insert_category(category).await.unwrap();
+    let prompt = build_base_prompt(&kg).await.unwrap();
+
+    assert!(prompt.contains("\n902 Custom Root Child\n"));
 }
 
 #[tokio::test]

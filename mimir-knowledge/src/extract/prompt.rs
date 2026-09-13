@@ -19,6 +19,7 @@ fn render_prompt_line(text: &str) -> String {
 /// The synthetic taxonomy root seeded by migration `031` is structural.
 const STRUCTURAL_CATEGORY_ID: i32 = 0;
 
+/// Determine whether a category is the synthetic taxonomy root.
 fn is_structural_category(category: &Category) -> bool {
     category.id == STRUCTURAL_CATEGORY_ID
 }
@@ -36,8 +37,13 @@ async fn build_category_guide(kg: &KnowledgeGraph) -> Result<String, KnowledgeEr
         if is_structural_category(category) {
             continue;
         }
+        let parent_id = if category.parent_id == Some(STRUCTURAL_CATEGORY_ID) {
+            None
+        } else {
+            category.parent_id
+        };
         children_by_parent
-            .entry(category.parent_id)
+            .entry(parent_id)
             .or_default()
             .push(category);
     }

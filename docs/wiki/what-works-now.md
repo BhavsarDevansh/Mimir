@@ -1,8 +1,8 @@
 # What Works in Mimir Today
 
-> **Last updated:** 2026-09-07
+> **Last updated:** 2026-09-13
 >
-> **Version:** 0.166.2
+> **Version:** 0.166.4
 >
 > This file is the **feature-level roadmap**: for every feature it records what exists, what is still pending to make it robust, and the GitHub issue tracking each step. The phase-level roadmap lives in `VISION/09-Roadmap/` and the release history in GitHub Releases; this file deliberately does not repeat either.
 
@@ -210,7 +210,7 @@ All client commands talk to the daemon over HTTP except `mimir personality list`
 | Provenance tracking | ✅ Works | Source tracking with `connector_instance_id` FK + `raw_reference` + typed audit log with `change_type`/`changed_by`. |
 | Forgetting system | ✅ Works | Trash (30-day retention), cascade forget, restore, bulk operations with safeguards. |
 | FTS5 search | ✅ Works | Full-text search over entities and aliases with top-fact retrieval. |
-| Fact extraction pipeline | ✅ Works | LLM → Rust validation → entity resolution (exact → alias → FTS5 fuzzy ≥ 0.9, type-filtered → create) → confidence → sensitive confirmation → insert ([#55](https://github.com/BhavsarDevansh/Mimir/issues/55), [#182](https://github.com/BhavsarDevansh/Mimir/issues/182)); comma-separated lists are split into one fact per item for the shared multi-valued predicate set, including the canonical `prefers` leaf ([#405](https://github.com/BhavsarDevansh/Mimir/issues/405)); the Categorisation Guide renders the complete DB-driven category tree so deeper classifications are visible (#410). |
+| Fact extraction pipeline | ✅ Works | LLM → Rust validation → entity resolution (exact → alias → FTS5 fuzzy ≥ 0.9, type-filtered → create) → confidence → sensitive confirmation → insert ([#55](https://github.com/BhavsarDevansh/Mimir/issues/55), [#182](https://github.com/BhavsarDevansh/Mimir/issues/182)); comma-separated lists are split into one fact per item for the shared multi-valued predicate set, including the canonical `prefers` leaf ([#405](https://github.com/BhavsarDevansh/Mimir/issues/405)); the Categorisation Guide renders the complete DB-driven assignable category tree so deeper classifications are visible (#410) and synthetic Root is excluded from extraction (#600). |
 | Closed taxonomy staging | 🟡 Partial | Migration 060 adds DB-backed relationship-tree metadata, deterministic category rules, and a durable unrecognized-fact queue (#468). Conversational and email extraction schemas use the DB leaf list as a closed enum, ingestion rejects unknown predicates, every fact-insertion path receives category fallback, email stages rejected facts with accepted/dropped/staged counts, and `mimir kb staged` supports map/reject review. Legacy predicate migration and typed entity-frame contracts remain open. |
 | `mimir kb` CLI (daemon-routed) | ✅ Works | All commands route through daemon HTTP. |
 | Pending sensitive-fact confirmation | ✅ Works | `GET /kb/pending`, confirm/reject routes + CLI; optional reject `--reason` in the audit log ([#141](https://github.com/BhavsarDevansh/Mimir/issues/141)). |

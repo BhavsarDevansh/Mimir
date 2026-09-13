@@ -16,16 +16,34 @@ fn render_prompt_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Render every category and its descendants for the extraction prompt.
+/// The synthetic taxonomy root seeded by migration `031` is structural.
+const STRUCTURAL_CATEGORY_ID: i32 = 0;
+
+/// Determine whether a category is the synthetic taxonomy root.
+fn is_structural_category(category: &Category) -> bool {
+    category.id == STRUCTURAL_CATEGORY_ID
+}
+
+/// Render every assignable category and its descendants for the extraction
+/// prompt.
 ///
 /// The guide is DB-driven so taxonomy changes cannot silently diverge from the
-/// categories the model is allowed to use.
+/// categories the model is allowed to use. The synthetic root remains available
+/// to tree APIs and governance surfaces.
 async fn build_category_guide(kg: &KnowledgeGraph) -> Result<String, KnowledgeError> {
     let categories = kg.list_all_categories().await?;
     let mut children_by_parent: HashMap<Option<i32>, Vec<&Category>> = HashMap::new();
     for category in &categories {
+        if is_structural_category(category) {
+            continue;
+        }
+        let parent_id = if category.parent_id == Some(STRUCTURAL_CATEGORY_ID) {
+            None
+        } else {
+            category.parent_id
+        };
         children_by_parent
-            .entry(category.parent_id)
+            .entry(parent_id)
             .or_default()
             .push(category);
     }

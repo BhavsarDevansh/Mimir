@@ -117,12 +117,15 @@ async fn prompt_keeps_kg_focused_base_rules() {
 }
 
 #[tokio::test]
-async fn prompt_renders_entire_category_tree() {
+async fn prompt_renders_entire_assignable_category_tree() {
     let (kg, _dir) = fresh_kg().await;
     let prompt = build_base_prompt(&kg).await.unwrap();
     let categories = kg.list_all_categories().await.unwrap();
 
     for category in categories {
+        if category.id == 0 {
+            continue;
+        }
         assert!(prompt.contains(&format!("{} {}", category.id, category.name)));
     }
 }
@@ -140,6 +143,45 @@ async fn prompt_renders_category_descendants_with_indentation() {
     assert!(prompt.contains("\n  740 Gaming\n"));
     assert!(prompt.contains("\n    741 Video Games\n"));
     assert!(prompt.contains("\n    742 Board Games\n"));
+}
+
+#[tokio::test]
+async fn prompt_excludes_structural_root_from_category_guide() {
+    let (kg, _dir) = fresh_kg().await;
+    let prompt = build_base_prompt(&kg).await.unwrap();
+
+    let categories = kg.list_all_categories().await.unwrap();
+    assert!(categories.iter().any(|category| category.id == 0));
+    assert!(!prompt.contains("\n0 Root\n"));
+    assert!(prompt.contains("\n1 System & Meta\n"));
+    assert!(prompt.contains("\n100 Identity & Biography\n"));
+}
+
+#[tokio::test]
+async fn category_tree_apis_still_include_structural_root() {
+    let (kg, _dir) = fresh_kg().await;
+    let categories = kg.list_all_categories().await.unwrap();
+    let catalogue = kg.get_top_level_catalogue().await.unwrap();
+
+    assert!(categories.iter().any(|category| category.id == 0));
+    assert!(catalogue.iter().any(|category| category.id == 0));
+}
+
+#[tokio::test]
+async fn prompt_includes_assignable_root_categories() {
+    let (kg, _dir) = fresh_kg().await;
+    let category = NewCategory {
+        id: 901,
+        name: "Custom Root".to_string(),
+        description: None,
+        parent_id: None,
+        memory_weight: Some(0.9),
+        memory_bucket_id: Some(4),
+    };
+    kg.insert_category(category).await.unwrap();
+    let prompt = build_base_prompt(&kg).await.unwrap();
+
+    assert!(prompt.contains("\n901 Custom Root\n"));
 }
 
 #[tokio::test]

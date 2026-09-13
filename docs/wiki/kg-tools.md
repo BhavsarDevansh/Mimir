@@ -79,6 +79,7 @@ Mimir exposes three LLM-callable tools that let the agent query your personal kn
 - **Use `kg_search` when the name is uncertain.** FTS5 handles fuzzy matching and aliases automatically.
 - **Respect confidence scores.** Facts with low confidence may be speculative or inferred. The default `min_confidence` of 0.5 filters out noise.
 - **Use `include_subtree` for broad categories.** When a predicate is a parent type in the relationship-type hierarchy, `include_subtree: true` returns facts for it and all descendant types in a single call.
+- **Use alias-aware predicate filters.** `kg_query` and `kg_related` resolve predicate names through `get_relationship_type_id`; an unknown predicate never creates a new relationship type.
 
 ## What Is Excluded
 

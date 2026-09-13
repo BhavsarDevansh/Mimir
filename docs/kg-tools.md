@@ -65,7 +65,7 @@ All tools implement the `mimir_core::Tool` trait and are registered in the serve
 ### `kg_query`
 
 1. Resolve `entity_name` via `queries::entity::get_by_name` (exact → alias → FTS5 fuzzy).
-2. If a `predicate` is provided, resolve it via the read-only `KnowledgeGraph::get_predicate_id` method. Missing predicates cause empty results (no predicate is inserted).
+2. If a `predicate` is provided, resolve it with the read-only, alias-aware `KnowledgeGraph::get_relationship_type_id` method. The method returns `Ok(None)` for an unknown predicate without creating a row, so `kg_query` returns an empty result.
 3. Query `queries::fact::get_facts_by_subject_filtered` with:
    - `pending_confirmation = 0`
    - `fact_status_id NOT IN (5, 6)` (excludes Superseded, Forgotten)
@@ -80,7 +80,7 @@ Implements Rust-level BFS with the following characteristics:
 - **Cycle detection:** `visited: HashSet<u32>` ensures each entity is expanded at most once.
 - **Per-level batched queries:** a single SQL query with `subject_id IN (...)` resolves all edges for the current frontier.
 - **Bounded reads:** each level applies a SQL `LIMIT` of `remaining_budget * 2` so SQLite does not read unbounded rows from high-degree entities.
-- **Predicate filtering:** optional `predicate_filter` restricts edges to a whitelist of predicates, resolved via the read-only `KnowledgeGraph::get_predicate_id` method. Missing predicates are skipped (not inserted). (Previous documentation incorrectly referenced `ensure_predicate`.)
+- **Predicate filtering:** optional `predicate_filter` restricts edges to a whitelist of predicates, resolved through the read-only, alias-aware `KnowledgeGraph::get_relationship_type_id` method. Unknown predicates return `Ok(None)` and are skipped without creating a row.
 - **Batch name resolution:** `queries::entity::get_entity_names` resolves all subject and object names in one query per level.
 
 Stop conditions: `depth >= max_depth`, `visited.len() >= max_nodes`, or empty frontier.
@@ -138,9 +138,9 @@ Stop conditions: `depth >= max_depth`, `visited.len() >= max_nodes`, or empty fr
 
 ## Targeted Predicate Lookup
 
-`KnowledgeGraph::relationship_type_id(&str)` performs a cached, non-mutating lookup of a relationship type by name, returning `None` if it does not exist; there is no public relationship-type creation helper, so missing rows require a migration or governance-approved vocabulary change.
+`KnowledgeGraph::get_relationship_type_id(name)` is the primary read-only lookup: it normalizes the name, resolves through `relationship_type_aliases`, caches hits, and returns `Ok(None)` when the predicate is unknown. There is no public relationship-type creation helper, so missing rows require a migration or governance-approved vocabulary change.
 
-`KnowledgeGraph::get_facts_by_subject_and_predicate(subject_id, relationship_type_id)` returns only facts matching a specific subject–predicate pair, avoiding full-table scans.
+`KnowledgeGraph::relationship_type_id(name)` is a convenience wrapper over `get_relationship_type_id`; it maps a successful `None` lookup and lookup failures to `None`. `KnowledgeGraph::get_facts_by_subject_and_predicate(subject_id, relationship_type_id)` returns only facts matching a specific subject–predicate pair, avoiding full-table scans.
 
 ## Relationship-Type Subtree Expansion
 

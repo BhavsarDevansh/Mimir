@@ -77,12 +77,39 @@ pub async fn get_children(
     Ok(rows)
 }
 
+/// Canonicalise a category name for prompt-safe storage.
+///
+/// Surrounding whitespace is removed so the DB tree and extraction prompt
+/// agree on a single spelling. Empty or control-character names are rejected
+/// because they can confuse taxonomy state or break prompt layout.
+fn canonicalise_category_name(name: &str) -> Result<String, KnowledgeError> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(KnowledgeError::Validation(
+            "Category name cannot be empty".to_string(),
+        ));
+    }
+    if name.chars().any(char::is_control) {
+        return Err(KnowledgeError::Validation(
+            "Category name cannot contain control characters".to_string(),
+        ));
+    }
+    Ok(name.to_string())
+}
+
 /// Insert a new category.
 pub async fn insert_category(
     pool: &SqlitePool,
     new: &NewCategory,
     _now: DateTime<Utc>,
 ) -> Result<Category, KnowledgeError> {
+    let canonical_name = canonicalise_category_name(&new.name)?;
+    if new.id <= 0 {
+        return Err(KnowledgeError::Validation(format!(
+            "New category id must be positive, got {id}",
+            id = new.id
+        )));
+    }
     if new.parent_id == Some(new.id) {
         return Err(KnowledgeError::Validation(
             "Category cannot be its own parent".to_string(),
@@ -101,7 +128,7 @@ pub async fn insert_category(
          RETURNING id, name, description, parent_id, memory_weight, memory_bucket_id, created_at",
     )
     .bind(new.id)
-    .bind(&new.name)
+    .bind(&canonical_name)
     .bind(&new.description)
     .bind(new.parent_id)
     .bind(new.memory_weight)

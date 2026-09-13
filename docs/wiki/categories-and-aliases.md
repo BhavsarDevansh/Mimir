@@ -21,7 +21,7 @@ Mimir's knowledge graph organises facts with two complementary layers:
 
 Aliases are stored in the `category_aliases` table (globally unique `alias` → `category_id`). Insertion is idempotent and race-safe: `insert_category_alias` performs an atomic `INSERT OR IGNORE` then resolves the resulting mapping, so concurrent writers never leak a raw `UNIQUE`-constraint error — rebinds to a different category return a `Validation` error, and empty aliases / unknown category ids are rejected. The seed migration (`038`) runs inside a transaction with foreign-key enforcement on and uses `CREATE … IF NOT EXISTS` for defensive idempotency.
 
-Categories always form a root-first tree: creating a category with itself as its parent is rejected before insert, preventing hidden taxonomy nodes from being omitted from the extraction guide or subtree retrieval.
+Category creation is validated at the knowledge-graph boundary: surrounding whitespace is trimmed, empty or whitespace-only names are rejected, control characters (including newlines and carriage returns) are rejected, and new IDs must be positive. It also rejects a category with itself as its parent, preventing hidden taxonomy nodes from being omitted from the extraction guide or subtree retrieval.
 
 ## Why categories, not a predicate hierarchy
 

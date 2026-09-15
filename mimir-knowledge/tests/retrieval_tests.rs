@@ -225,3 +225,75 @@ async fn deterministic_retrieval_paginates_kg_query_facts() {
     let mary_entity = result.entities.iter().find(|e| e.name == "Mary").unwrap();
     assert_eq!(mary_entity.facts.len(), 55);
 }
+
+#[tokio::test]
+async fn deterministic_retrieval_carries_connector_provenance() {
+    use mimir_knowledge::models::connector::UpsertConnectorInput;
+    use mimir_knowledge::models::enums::{ConnectorAuthState, ConnectorStatus, ConnectorType};
+    use mimir_knowledge::models::source::ExtractionMethod;
+
+    let (kg, ctx, _dir) = setup().await;
+    let mary = kg
+        .create_entity(
+            "Mary",
+            mimir_knowledge::models::entity::EntityType::Person,
+            &[],
+        )
+        .await
+        .unwrap()
+        .id;
+    let instance = kg
+        .upsert_connector(UpsertConnectorInput {
+            connector_type: ConnectorType::Email,
+            slug: "gmail".to_string(),
+            backend: "imap".to_string(),
+            display_name: "Gmail".to_string(),
+            config_json: "{}".to_string(),
+            status: Some(ConnectorStatus::Active),
+            auth_state: Some(ConnectorAuthState::Authenticated),
+        })
+        .await
+        .unwrap();
+    kg.insert_fact(NewFact {
+        subject_id: mary,
+        relationship_type: "lives_in".to_string(),
+        object_id: None,
+        object_literal: Some("London".to_string()),
+        valid_from: None,
+        valid_until: None,
+        source_type: SourceType::Connector,
+        connector_instance_id: Some(instance.id),
+        connector_type: Some(ConnectorType::Email),
+        raw_reference: Some("17:42".to_string()),
+        extraction_method: Some(ExtractionMethod::StructuredParse),
+        inferred: false,
+        inference_depth: 0,
+        confidence: Some(0.85),
+        parent_fact_ids: Vec::new(),
+        category_ids: Vec::new(),
+    })
+    .await
+    .unwrap();
+
+    let agent = RetrievalAgent::new(kg, ctx);
+    let result = agent.retrieve("Mary").await.unwrap();
+    let fact = result
+        .entities
+        .iter()
+        .find(|entity| entity.name == "Mary")
+        .and_then(|entity| entity.facts.first())
+        .expect("Mary fact should be retrieved");
+    let source = fact
+        .sources
+        .first()
+        .expect("connector source should travel");
+
+    assert_eq!(source.source_type, "Connector");
+    assert_eq!(source.connector_instance_id, Some(instance.id));
+    assert_eq!(source.connector_type, Some("email".to_string()));
+    assert_eq!(source.raw_reference.as_deref(), Some("17:42"));
+    assert_eq!(
+        source.extraction_method,
+        Some(ExtractionMethod::StructuredParse)
+    );
+}

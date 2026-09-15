@@ -66,6 +66,50 @@ pub enum ExtractionMethod {
 
 const_assert!((ExtractionMethod::LlmExtraction as i16) != 0);
 
+impl TryFrom<i16> for ExtractionMethod {
+    type Error = ();
+
+    fn try_from(value: i16) -> Result<Self, Self::Error> {
+        match value {
+            x if x == Self::LlmExtraction as i16 => Ok(Self::LlmExtraction),
+            x if x == Self::StructuredParse as i16 => Ok(Self::StructuredParse),
+            x if x == Self::UserInput as i16 => Ok(Self::UserInput),
+            x if x == Self::InferenceRule as i16 => Ok(Self::InferenceRule),
+            x if x == Self::DedupMerge as i16 => Ok(Self::DedupMerge),
+            _ => Err(()),
+        }
+    }
+}
+
+impl std::str::FromStr for ExtractionMethod {
+    type Err = ();
+
+    /// Parse the tool wire representation back into the enum.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "LlmExtraction" => Ok(Self::LlmExtraction),
+            "StructuredParse" => Ok(Self::StructuredParse),
+            "UserInput" => Ok(Self::UserInput),
+            "InferenceRule" => Ok(Self::InferenceRule),
+            "DedupMerge" => Ok(Self::DedupMerge),
+            _ => Err(()),
+        }
+    }
+}
+
+impl ExtractionMethod {
+    /// Wire representation of the extraction method.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::LlmExtraction => "LlmExtraction",
+            Self::StructuredParse => "StructuredParse",
+            Self::UserInput => "UserInput",
+            Self::InferenceRule => "InferenceRule",
+            Self::DedupMerge => "DedupMerge",
+        }
+    }
+}
+
 /// Provenance record linking a fact to its origin.
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow, Serialize, Deserialize)]
 pub struct Source {
@@ -102,5 +146,30 @@ mod tests {
         assert_eq!(SourceType::Interaction.as_str(), "Interaction");
         assert_eq!(SourceType::Import.as_str(), "Import");
         assert_eq!(SourceType::System.as_str(), "System");
+    }
+
+    #[test]
+    fn extraction_method_try_from_roundtrip() {
+        for id in 1..=5 {
+            let method = ExtractionMethod::try_from(id).unwrap();
+            assert_eq!(method as i16, id);
+            assert_eq!(ExtractionMethod::try_from(method as i16), Ok(method));
+        }
+        assert_eq!(ExtractionMethod::try_from(0), Err(()));
+        assert_eq!(ExtractionMethod::try_from(6), Err(()));
+    }
+
+    #[test]
+    fn extraction_method_as_str_matches_tool_wire_contract() {
+        let cases = [
+            (ExtractionMethod::LlmExtraction, "LlmExtraction"),
+            (ExtractionMethod::StructuredParse, "StructuredParse"),
+            (ExtractionMethod::UserInput, "UserInput"),
+            (ExtractionMethod::InferenceRule, "InferenceRule"),
+            (ExtractionMethod::DedupMerge, "DedupMerge"),
+        ];
+        for (method, name) in cases {
+            assert_eq!(method.as_str(), name);
+        }
     }
 }

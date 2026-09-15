@@ -98,6 +98,7 @@ fn bench_retrieval_summary(c: &mut Criterion) {
                         valid_until: None,
                         status: "active".to_string(),
                         inferred: false,
+                        sources: Vec::new(),
                     })
                     .collect(),
             })
@@ -129,6 +130,7 @@ fn bench_retrieval_fact_same_identity(c: &mut Criterion) {
         valid_until: None,
         status: "active".to_string(),
         inferred: false,
+        sources: Vec::new(),
     };
     let other = fact.clone();
     c.bench_function("retrieval_fact_same_identity", |b| {

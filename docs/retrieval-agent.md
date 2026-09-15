@@ -2,7 +2,7 @@
 
 ## Overview
 
-The **Retrieval Agent** is the deterministic research stage behind Mimir's `retrieve_context` tool. It gathers structured context from the knowledge graph and conversation history before the main LLM composes an answer. It implements the original pre-response retrieval design in issue #128, with the loop-control bug from issue #492 fixed by removing the LLM-controlled inner loop.
+The **Retrieval Agent** is the deterministic research stage behind Mimir's `retrieve_context` tool. It gathers structured context from the knowledge graph and conversation history before the main LLM composes an answer. It implements the original pre-response retrieval design in issue #128, with the loop-control bug from issue #492 fixed by removing the LLM-controlled inner loop. This provenance slice implements #494.
 
 ## Architecture
 
@@ -33,7 +33,9 @@ Main LLM via ToolOutput
 - **Bounded fan-out**: A single retrieval task can never spawn an unbounded number of concurrent database queries. Task, token, candidate, and salient-token caps bound the plan, and steps execute in fixed-size chunks so at most a constant number of tool futures are in flight.
 - **Possessive handling**: Possessive suffixes (`'s`, `’s`) are stripped case-insensitively before tokenisation, so `JAMES'S` and `James’s` never plan a junk `S` search.
 - **Structured output**: `RetrievedContext` contains entities, facts, relations, conversation snippets, `finish_reason`, and `steps_executed`.
+- **Provenance preservation**: `kg_query` sources carry connector instance id, connector type, raw reference, extraction method, source type, and extracted timestamp. When the same structural fact is seen first through `kg_search` and later through `kg_query`, the deterministic merge updates the existing fact with the newly discovered sources instead of emitting a duplicate.
 - **Temporal context**: Facts retain RFC 3339 UTC `valid_from` and `valid_until` bounds across `kg_query` and `kg_search`.
+- **Source identity**: Facts retain complete source provenance, including the connector instance and raw reference needed by the later query-time source-fetch strategy (#495). This slice does not fetch external data; it only makes the pointer available deterministically.
 - **Error resilience**: A failed retrieval step is logged and omitted, while other steps continue. The retriever does not retry automatically or turn transient errors into an empty-result signal.
 - **Progress events**: On streaming requests, each step emits `ToolProgress::Started` and `ToolProgress::Finished` through the existing `ToolContext` factory path (issue #487). Blocking paths pass no channel and run silently.
 
@@ -56,7 +58,7 @@ pub struct RetrievedContext {
 ## Files
 
 - `mimir-knowledge/src/retrieval/agent.rs` — deterministic retrieval executor
-- `mimir-knowledge/src/retrieval/types.rs` — `RetrievedContext` and related types
+- `mimir-knowledge/src/retrieval/types.rs` — `RetrievedContext`, `RetrievedFact`, and `RetrievedSource`; `RetrievedFact::merge_sources` deduplicates equivalent source records while retaining their order
 - `mimir-knowledge/src/tools/retrieve_context.rs` — `RetrieveContextTool` exposed to the main LLM
 - `mimir-knowledge/tests/retrieval_tests.rs` — deterministic retrieval tests
 

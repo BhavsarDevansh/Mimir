@@ -71,7 +71,7 @@ All tools implement the `mimir_core::Tool` trait and are registered in the serve
    - `fact_status_id NOT IN (5, 6)` (excludes Superseded, Forgotten)
    - optional `predicate_id` and `confidence >= ?`
    - SQL-level `ORDER BY confidence DESC, valid_from DESC LIMIT ? OFFSET ?`
-4. Batch-fetch sources per result page and attach to output.
+4. Batch-fetch sources per result page and attach to output. Each source includes connector instance id, connector type, raw reference, extraction method, source type, and extracted timestamp when available. `ExtractionMethod::try_from(i16)` and `ExtractionMethod::from_str(&str)` are now public conversions, so retrieval can represent stored IDs and tool-wire strings as one typed contract.
 
 ### `kg_related`
 
@@ -126,6 +126,7 @@ Stop conditions: `depth >= max_depth`, `visited.len() >= max_nodes`, or empty fr
 - `mimir-knowledge/src/queries/entity/` (additions)
 - `mimir-knowledge/src/queries/fact/` (additions)
 - `mimir-knowledge/src/tools/kg_query.rs`
+- `mimir-knowledge/src/retrieval/types.rs` (source-provenance types; implements #494)
 - `mimir-knowledge/src/tools/kg_related.rs`
 - `mimir-knowledge/src/tools/kg_search.rs`
 - `mimir-knowledge/src/tools/mod.rs`
@@ -209,7 +210,17 @@ The tool returns a `ToolOutput` whose `result` field contains a JSON-serialized 
           "object_literal": "shellfish",
           "confidence": 0.95,
           "status": "Active",
-          "inferred": false
+          "inferred": false,
+          "sources": [
+            {
+              "source_type": "Connector",
+              "connector_instance_id": 7,
+              "connector_type": "email",
+              "raw_reference": "17:42",
+              "extracted_at": "2026-09-01T10:00:00Z",
+              "extraction_method": "StructuredParse"
+            }
+          ]
         }
       ]
     }

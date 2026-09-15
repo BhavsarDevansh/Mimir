@@ -6,6 +6,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::models::source::ExtractionMethod;
+
 /// Root container returned by the RetrievalAgent after investigating
 /// the knowledge graph and conversation history.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -54,6 +56,19 @@ pub struct RetrievedFact {
     pub valid_until: Option<DateTime<Utc>>,
     pub status: String,
     pub inferred: bool,
+    pub sources: Vec<RetrievedSource>,
+}
+
+/// Connector provenance for a retrieved fact. Non-connector sources carry
+/// only the source type and timestamp so provenance remains explicit.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RetrievedSource {
+    pub source_type: String,
+    pub connector_instance_id: Option<i32>,
+    pub connector_type: Option<String>,
+    pub raw_reference: Option<String>,
+    pub extracted_at: DateTime<Utc>,
+    pub extraction_method: Option<ExtractionMethod>,
 }
 
 impl RetrievedFact {
@@ -71,6 +86,16 @@ impl RetrievedFact {
             && self.valid_until == other.valid_until
             && self.status == other.status
             && self.inferred == other.inferred
+    }
+
+    /// Merge source records from an equivalent fact, preserving order and
+    /// deduplicating exact source records.
+    pub fn merge_sources(&mut self, other: &Self) {
+        for source in &other.sources {
+            if !self.sources.contains(source) {
+                self.sources.push(source.clone());
+            }
+        }
     }
 }
 
@@ -107,7 +132,42 @@ mod tests {
             valid_until: None,
             status: "active".to_string(),
             inferred: false,
+            sources: Vec::new(),
         }
+    }
+
+    #[test]
+    fn retrieved_source_serde_uses_wire_contract() {
+        let source = RetrievedSource {
+            source_type: "Connector".to_string(),
+            connector_instance_id: Some(1),
+            connector_type: Some("email".to_string()),
+            raw_reference: Some("17:42".to_string()),
+            extracted_at: Utc::now(),
+            extraction_method: Some(ExtractionMethod::StructuredParse),
+        };
+        let json = serde_json::to_string(&source).unwrap();
+        let back: RetrievedSource = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, source);
+        assert!(json.contains("\"connector_type\":\"email\""));
+    }
+
+    #[test]
+    fn same_identity_ignores_sources_but_merges_them() {
+        let source = RetrievedSource {
+            source_type: "Connector".to_string(),
+            connector_instance_id: Some(1),
+            connector_type: Some("email".to_string()),
+            raw_reference: Some("17:42".to_string()),
+            extracted_at: Utc::now(),
+            extraction_method: Some(ExtractionMethod::StructuredParse),
+        };
+        let a = fact("lives_in", 0.9);
+        let mut b = a.clone();
+        b.sources = vec![source.clone()];
+        assert!(a.same_identity(&b));
+        b.merge_sources(&a);
+        assert_eq!(b.sources, vec![source]);
     }
 
     #[test]

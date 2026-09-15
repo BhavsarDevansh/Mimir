@@ -1,5 +1,6 @@
 //! Deterministic retrieval over the knowledge graph and conversation history.
 
+use std::str::FromStr;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -9,8 +10,10 @@ use serde_json::Value;
 use tracing::{debug, info, warn};
 
 use crate::KnowledgeGraph;
+use crate::models::enums::ConnectorType;
 use crate::retrieval::types::{
     ConversationSnippet, RetrievedContext, RetrievedEntity, RetrievedFact, RetrievedRelation,
+    RetrievedSource,
 };
 use crate::tools::{KgQueryTool, KgRelatedTool, KgSearchTool};
 
@@ -524,6 +527,43 @@ impl RetrievalAgent {
                 .get("inferred")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
+            sources: fact
+                .get("sources")
+                .and_then(Value::as_array)
+                .map(|sources| sources.iter().filter_map(Self::parse_source).collect())
+                .unwrap_or_default(),
+        })
+    }
+
+    /// Parse one source record. Missing required provenance fields cause the
+    /// source to be omitted rather than silently becoming a fabricated or
+    /// "now"-timestamped record.
+    fn parse_source(source: &Value) -> Option<RetrievedSource> {
+        let source_type = source
+            .get("source_type")
+            .and_then(Value::as_str)
+            .map(str::to_string)?;
+        let extracted_at = source.get("extracted_at").and_then(parse_utc)?;
+        Some(RetrievedSource {
+            source_type,
+            connector_instance_id: source
+                .get("connector_instance_id")
+                .and_then(Value::as_i64)
+                .and_then(|id| i32::try_from(id).ok()),
+            connector_type: source
+                .get("connector_type")
+                .and_then(Value::as_str)
+                .and_then(|name| ConnectorType::from_str(name).ok())
+                .map(|connector_type| connector_type.as_str().to_string()),
+            raw_reference: source
+                .get("raw_reference")
+                .and_then(Value::as_str)
+                .map(String::from),
+            extracted_at,
+            extraction_method: source
+                .get("extraction_method")
+                .and_then(Value::as_str)
+                .and_then(|name| name.parse().ok()),
         })
     }
 
@@ -553,8 +593,12 @@ impl RetrievalAgent {
 
     fn merge_facts(target: &mut Vec<RetrievedFact>, facts: Vec<RetrievedFact>) {
         for fact in facts {
-            if !target.iter().any(|existing| existing.same_identity(&fact)) {
-                target.push(fact);
+            match target
+                .iter_mut()
+                .find(|existing| existing.same_identity(&fact))
+            {
+                Some(existing) => existing.merge_sources(&fact),
+                None => target.push(fact),
             }
         }
     }
@@ -857,6 +901,7 @@ mod tests {
             valid_until: None,
             status: "active".to_string(),
             inferred: false,
+            sources: Vec::new(),
         }
     }
 

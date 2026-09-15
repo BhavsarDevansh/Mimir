@@ -7,6 +7,8 @@ use std::sync::Arc;
 use mimir_core::tools::{Tool, ToolError, ToolOutput, ToolPermission};
 
 use crate::KnowledgeGraph;
+use crate::models::enums::ConnectorType;
+use crate::models::source::ExtractionMethod;
 use crate::queries::entity::get_by_name;
 use crate::queries::fact::{
     count_facts_by_relationship_subtree, count_facts_by_subject_filtered,
@@ -48,7 +50,11 @@ struct EntitySummary {
 #[derive(Debug, Serialize)]
 struct SourceSummary {
     source_type: String,
+    connector_instance_id: Option<i32>,
+    connector_type: Option<String>,
+    raw_reference: Option<String>,
     extracted_at: DateTime<Utc>,
+    extraction_method: Option<ExtractionMethod>,
 }
 
 #[derive(Debug, Serialize)]
@@ -311,7 +317,17 @@ impl Tool for KgQueryTool {
                 .into_iter()
                 .map(|s| SourceSummary {
                     source_type: source_type_name(s.source_type_id),
+                    connector_instance_id: s.connector_instance_id,
+                    connector_type: s
+                        .connector_type_id
+                        .and_then(|id| ConnectorType::try_from(id).ok())
+                        .map(|connector_type| connector_type.as_str())
+                        .map(str::to_string),
+                    raw_reference: s.raw_reference,
                     extracted_at: s.extracted_at,
+                    extraction_method: s
+                        .extraction_method_id
+                        .and_then(|id| ExtractionMethod::try_from(id).ok()),
                 })
                 .collect();
             fact_details.push(FactDetail {

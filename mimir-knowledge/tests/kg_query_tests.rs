@@ -1,6 +1,7 @@
 //! Query unit tests for `kg_query` tool logic.
 
 use chrono::Utc;
+use mimir_core::tools::Tool;
 use mimir_knowledge::models::fact::{FactStatus, NewFact};
 use mimir_knowledge::models::source::SourceType;
 use mimir_knowledge::queries::fact::set_status;
@@ -342,7 +343,7 @@ async fn test_kg_query_excludes_superseded_forgotten() {
 
 #[tokio::test]
 async fn test_kg_query_input_too_long() {
-    use mimir_core::tools::{Tool, ToolError};
+    use mimir_core::tools::ToolError;
 
     let tg = common::TestGraph::new().await;
     let tool = mimir_knowledge::KgQueryTool::new(std::sync::Arc::new(tg.kg));
@@ -356,4 +357,106 @@ async fn test_kg_query_input_too_long() {
         "expected InvalidArguments for 300-char entity_name, got {:?}",
         result
     );
+}
+
+#[tokio::test]
+async fn kg_query_connector_provenance_serializes_with_extraction_method() {
+    use mimir_core::tools::Tool;
+    use mimir_knowledge::models::connector::UpsertConnectorInput;
+    use mimir_knowledge::models::enums::{ConnectorAuthState, ConnectorStatus, ConnectorType};
+    use mimir_knowledge::models::source::ExtractionMethod;
+
+    let tg = common::TestGraph::new().await;
+    let alice = tg.create_person("Alice").await;
+    let instance = tg
+        .kg
+        .upsert_connector(UpsertConnectorInput {
+            connector_type: ConnectorType::Email,
+            slug: "gmail".to_string(),
+            backend: "imap".to_string(),
+            display_name: "Gmail".to_string(),
+            config_json: "{}".to_string(),
+            status: Some(ConnectorStatus::Active),
+            auth_state: Some(ConnectorAuthState::Authenticated),
+        })
+        .await
+        .unwrap();
+    let _fact = tg
+        .kg
+        .insert_fact(NewFact {
+            subject_id: alice,
+            relationship_type: "lives_in".to_string(),
+            object_id: None,
+            object_literal: Some("London".to_string()),
+            valid_from: None,
+            valid_until: None,
+            source_type: SourceType::Connector,
+            connector_instance_id: Some(instance.id),
+            connector_type: Some(ConnectorType::Email),
+            raw_reference: Some("17:42".to_string()),
+            extraction_method: Some(ExtractionMethod::StructuredParse),
+            inferred: false,
+            inference_depth: 0,
+            confidence: Some(0.85),
+            parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
+        })
+        .await
+        .unwrap();
+
+    let tool = mimir_knowledge::KgQueryTool::new(std::sync::Arc::new(tg.kg));
+    let output = tool
+        .execute(serde_json::json!({"entity_name": "Alice"}))
+        .await
+        .unwrap();
+    let source = &output.result.unwrap()["facts"][0]["sources"][0];
+
+    assert_eq!(source["source_type"], "Connector");
+    assert_eq!(source["connector_instance_id"], instance.id);
+    assert_eq!(source["connector_type"], "email");
+    assert_eq!(source["raw_reference"], "17:42");
+    assert_eq!(source["extraction_method"], "StructuredParse");
+    assert!(source["extracted_at"].is_string());
+}
+
+#[tokio::test]
+async fn kg_query_non_connector_provenance_serializes_null_connector_fields() {
+    use mimir_core::tools::Tool;
+
+    let tg = common::TestGraph::new().await;
+    let alice = tg.create_person("Alice").await;
+    tg.kg
+        .insert_fact(NewFact {
+            subject_id: alice,
+            relationship_type: "prefers".to_string(),
+            object_id: None,
+            object_literal: Some("tea".to_string()),
+            valid_from: None,
+            valid_until: None,
+            source_type: SourceType::UserEdit,
+            connector_instance_id: None,
+            connector_type: None,
+            raw_reference: None,
+            extraction_method: None,
+            inferred: false,
+            inference_depth: 0,
+            confidence: Some(0.9),
+            parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
+        })
+        .await
+        .unwrap();
+
+    let tool = mimir_knowledge::KgQueryTool::new(std::sync::Arc::new(tg.kg));
+    let output = tool
+        .execute(serde_json::json!({"entity_name": "Alice"}))
+        .await
+        .unwrap();
+    let source = &output.result.unwrap()["facts"][0]["sources"][0];
+
+    assert_eq!(source["source_type"], "UserEdit");
+    assert!(source["connector_instance_id"].is_null());
+    assert!(source["connector_type"].is_null());
+    assert!(source["raw_reference"].is_null());
+    assert_eq!(source["extraction_method"], "UserInput");
 }

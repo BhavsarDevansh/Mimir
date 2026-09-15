@@ -32,7 +32,7 @@ fn now_anchor_range(memory: &str) -> Option<(usize, usize)> {
         return None;
     }
 
-    let end = memory.find('\n').map_or(memory.len(), |offset| offset);
+    let end = memory.find('\n').unwrap_or(memory.len());
     let content = memory[..end].strip_prefix("Now: ")?;
     let (timestamp, prose) = content.split_once(" (")?;
     let timestamp = DateTime::parse_from_rfc3339(timestamp).ok()?;

@@ -384,16 +384,6 @@ fn add_secret(
     }
 }
 
-/// Title-case a connector type for the default display name (`gmail` →
-/// `Gmail`).
-fn title_case(s: &str) -> String {
-    let mut chars = s.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-        None => String::new(),
-    }
-}
-
 /// Ask a yes/no question, defaulting to no. Non-terminal stdin (scripts,
 /// pipes) aborts with a message pointing at `--yes` instead of hanging or
 /// failing opaquely.

@@ -468,7 +468,7 @@ async fn setup_photos_supervisor(
 /// `entity_locations` row for the owner (coords + place name), and a
 /// `Geographic` coordinate row anchoring the place entity (Phase 3 C2 / #196).
 #[tokio::test]
-async fn supervisor_ingests_photo_as_took_photo_at_place_fact() {
+async fn supervisor_ingests_photo_with_seeded_took_photo_at_fact() {
     let watch = tempfile::tempdir().unwrap();
     fs::copy(fixture("exif.jpg"), watch.path().join("IMG_001.jpg")).unwrap();
 
@@ -476,8 +476,8 @@ async fn supervisor_ingests_photo_as_took_photo_at_place_fact() {
     let (supervisor, kg, row_id, _shutdown_tx) =
         setup_photos_supervisor(kg, watch.path(), "Devansh", rome_geocoder()).await;
 
-    // The predicate is created on first ingestion (ensure_relationship_type),
-    // so poll until the supervisor's first cycle registers it.
+    // The closed taxonomy pre-seeds the predicate; poll until the supervisor
+    // first cycle resolves it for the fact lookup.
     let (owner, place, fact) = wait_until_some(
         || async {
             let took_photo_at = kg.relationship_type_id("took_photo_at").await?;

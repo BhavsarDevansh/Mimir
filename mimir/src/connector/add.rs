@@ -3,11 +3,12 @@
 
 use mimir_api_types::{AddConnectorRequest, IngestTokenRequest};
 use mimir_client::MimirClient;
+use mimir_core::tools::snake_to_title_case;
 
 use super::oauth::{ingest_oauth_bundle, open_in_browser, run_oauth_flow_with_opener};
 use super::{
     CredentialKind, add_secret, credential_kind_for, exit_with_error, make_client, merge_config,
-    print_json, render_client_error, title_case,
+    print_json, render_client_error,
 };
 
 /// Register a new connector instance.
@@ -85,7 +86,7 @@ pub(crate) async fn handle_connector_add_with_opener(
     let merged =
         merge_config(&config, config_json.as_deref()).unwrap_or_else(|e| exit_with_error(e));
     let slug = slug.unwrap_or_else(|| connector_type.to_ascii_lowercase());
-    let display_name = name.unwrap_or_else(|| title_case(&connector_type));
+    let display_name = name.unwrap_or_else(|| snake_to_title_case(&connector_type));
     let kind = credential_kind_for(&merged);
 
     // Acquire the credential before the daemon registers anything: a

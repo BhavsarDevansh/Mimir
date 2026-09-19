@@ -386,7 +386,7 @@ fn merge_config_dotted_path_overwrites_scalar() {
 }
 
 // ---------------------------------------------------------------------------
-// credential_kind_for / title_case / error rendering
+// credential_kind_for / error rendering
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -409,14 +409,6 @@ fn credential_kind_detected_from_auth_tag() {
     ] {
         assert!(matches!(credential_kind_for(&config), CredentialKind::None));
     }
-}
-
-#[test]
-fn title_case_uppercases_first_letter() {
-    assert_eq!(title_case("email"), "Email");
-    assert_eq!(title_case("calendar"), "Calendar");
-    assert_eq!(title_case("photos"), "Photos");
-    assert_eq!(title_case(""), "");
 }
 
 #[test]

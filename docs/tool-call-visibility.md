@@ -40,6 +40,8 @@ The `max_tool_rounds` setting defaults to 100 and is configurable via `[agent] m
 
 Each tool has a `display_name` derived from its `name()` via `snake_to_title_case` (e.g. `get_current_time` → `Get Current Time`). The display name is stored in `ToolMetadata` at registration time.
 
+The connector CLI uses the same `mimir_core::tools::snake_to_title_case` helper for connector-type defaults, so connector labels and tool labels share one display-name conversion implementation. This deduplicates the connector-specific title-case helper (issue #622).
+
 ### Terminal Rendering
 
 Tool calls are rendered in the CLI using `colored` crate with `.dimmed().italic()` styling. When a tool starts executing, a "working" indicator is shown; once the result arrives, the full summary is displayed as a separate line:

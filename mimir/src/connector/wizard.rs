@@ -16,14 +16,13 @@
 /// `key=value` pairs do, and registers via the shared
 /// [`register_and_ingest`](super::add::register_and_ingest) core.
 use is_terminal::IsTerminal;
+use mimir_core::tools::snake_to_title_case;
 use serde_json::{Value, json};
 
 use super::add::no_backends_message;
 use super::add::register_and_ingest;
 use super::oauth::{open_in_browser, run_oauth_flow_with_opener_and_secret};
-use super::{
-    CredentialKind, exit_with_error, make_client, print_json, render_client_error, title_case,
-};
+use super::{CredentialKind, exit_with_error, make_client, print_json, render_client_error};
 
 /// Google OAuth authorize endpoint used as the Gmail IMAP default (the
 /// user's Google Cloud OAuth client points here).
@@ -338,7 +337,10 @@ pub(crate) async fn handle_connector_add_wizard_with_deps(
 
     let entry = select_catalog_entry(&catalog, prompts);
     let display_name = prompts
-        .input("Display name", Some(&title_case(&entry.connector_type)))
+        .input(
+            "Display name",
+            Some(&snake_to_title_case(&entry.connector_type)),
+        )
         .unwrap_or_else(|e| exit_with_error(e));
     let slug = prompts
         .input("Slug (unique identifier)", Some(&slugify(&display_name)))
@@ -467,7 +469,7 @@ fn select_catalog_entry(
     let options = catalog
         .entries
         .iter()
-        .map(|e| format!("{} ({})", title_case(&e.connector_type), e.backend))
+        .map(|e| format!("{} ({})", snake_to_title_case(&e.connector_type), e.backend))
         .collect::<Vec<_>>();
     let index = prompts
         .select("Connector type", &options)

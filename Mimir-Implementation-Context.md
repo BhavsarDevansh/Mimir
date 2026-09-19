@@ -2,7 +2,7 @@
 
 > **Created:** 2025-05-20
 >
-> **Last Updated:** 2026-09-05
+> **Last Updated:** 2026-09-18
 >
 > **Vision Docs:** `VISION/` directory — 10 sections: `00-Overview`, `01-Core-Agent`, `02-Knowledge-Graph`, `03-Connectors`, `04-Reasoning-Engine`, `05-Proactive-Agent`, `06-Vision-Tracking`, `07-Journeys`, `08-Architecture`, `09-Roadmap`
 >
@@ -222,6 +222,7 @@ The daemon exposes `GET /v1/models` and `POST /v1/chat/completions` (blocking + 
 - Three permission levels: `Auto` (always run), `Ask` (confirm first), `Deny` (never run)
 - Built-in: `echo`, `get_current_time`
 - CLI wrappers: invoke external commands as tools
+- Display-name conversion lives in `mimir_core::tools::snake_to_title_case`; the connector CLI reuses it for connector-type defaults (issue #622).
 
 ### Skills
 - Object-safe `Skill` trait with `SkillContext` (access to tools, LLM, context)
